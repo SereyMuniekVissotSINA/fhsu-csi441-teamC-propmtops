@@ -1,69 +1,121 @@
-import Image from "next/image";
+const features = [
+  {
+    title: "Auth & Workspaces",
+    description:
+      "Team-based access with role-based permissions and secure API keys.",
+    icon: "◉",
+  },
+  {
+    title: "Version Control",
+    description:
+      "Every edit is an immutable snapshot. Revert to any version safely.",
+    icon: "⌘",
+  },
+  {
+    title: "Prompt CMS",
+    description:
+      "Full CRUD with dynamic {{variables}} and per-prompt model targeting.",
+    icon: "</>",
+  },
+  {
+    title: "Proxy API",
+    description:
+      "Send prompt_id and variables. We inject, call the LLM, log usage, and return the result.",
+    icon: "ϟ",
+  },
+  {
+    title: "Token Analytics",
+    description:
+      "Track token consumption, API calls, latency, and estimated cost per prompt.",
+    icon: "▥",
+  },
+  {
+    title: "RESTful API",
+    description:
+      "Clean JSON responses with consistent error handling and authentication.",
+    icon: ">_",
+  },
+];
 
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="min-h-screen bg-[#080808] text-white">
+      {/* Navigation */}
+      <nav className="border-b border-zinc-800/70">
+        <div className="mx-auto flex h-18 max-w-6xl items-center justify-between px-6">
+          {/* Logo */}
+          <div className="flex items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500 font-mono text-sm font-bold text-black">
+              &gt;_
+            </div>
+
+            <span className="text-lg font-semibold tracking-tight">
+              PromptOps
+            </span>
+          </div>
+
+          {/* Navigation buttons */}
+          <div className="flex items-center gap-3">
+            <button className="rounded-lg px-4 py-2 text-sm text-zinc-300 transition hover:text-white">
+              Sign In
+            </button>
+
+            <button className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-black transition hover:bg-emerald-400">
+              Get Started
+            </button>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      </nav>
+
+      {/* Hero */}
+      <section className="mx-auto flex max-w-6xl flex-col items-center px-6 pb-20 pt-28 text-center">
+        <h1 className="max-w-4xl text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl">
+          Version-Control Your{" "}
+          <span className="text-emerald-500">AI Prompts</span>
+        </h1>
+
+        <p className="mt-6 max-w-2xl text-base leading-7 text-zinc-400 sm:text-lg">
+          Store, version, and proxy your LLM prompts with full token analytics.
+          The Git for prompts — built for engineering teams.
+        </p>
+
+        {/* Hero buttons */}
+        <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <button className="rounded-lg bg-emerald-500 px-6 py-3 text-sm font-semibold text-black transition hover:bg-emerald-400">
+            Start Free &gt;_
+          </button>
+
+          <button className="rounded-lg border border-zinc-700 px-6 py-3 text-sm font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900">
+            Sign In
+          </button>
         </div>
-      </main>
-    </div>
+      </section>
+
+      {/* Features */}
+      <section className="mx-auto max-w-6xl px-6 pb-24">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {features.map((feature) => (
+            <div
+              key={feature.title}
+              className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 transition hover:border-emerald-500/40 hover:bg-zinc-900/80"
+            >
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-sm text-emerald-500">
+                  {feature.icon}
+                </span>
+
+                <h2 className="font-semibold text-zinc-100">
+                  {feature.title}
+                </h2>
+              </div>
+
+              <p className="mt-6 text-sm leading-6 text-zinc-400">
+                {feature.description}
+              </p>
+            </div>
+          ))}
+        </div>
+      </section>
+    </main>
   );
 }
