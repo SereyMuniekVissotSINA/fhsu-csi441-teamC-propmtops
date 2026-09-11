@@ -20,6 +20,15 @@
     "**/node_modules": true,
     "**/.next": true,
     "**/src/generated": true,
-    "**/bun.lock": true
+    "**/bun.lock": true,
+    "**/Documents": true,
+    "**/*.codex": true,
+    "**/*.claude": true
+  }
+
+  ,"files.exclude": {
+    "**/Documents": true,
+    "**/*.codex": true,
+    "**/*.claude": true
   }
 }
