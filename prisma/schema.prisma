@@ -24,9 +24,11 @@ model User {
   passwordHash  String?
   role          Role      @default(USER)
 
-  accounts Account[]
-  sessions Session[]
-  prompts  Prompt[]
+  accounts       Account[]
+  sessions       Session[]
+  prompts        Prompt[]
+  memberships    Membership[]
+  promptVersions PromptVersion[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -77,20 +79,100 @@ model VerificationToken {
 }
 
 // ---------------------------------------------------------------------------
-// Domain models — replace with the real Prompt_Ops domain
+// Domain models
+//
+// These mirror the concepts the browser-only demo already models in
+// `src/lib/demo-accounts.ts` and `src/lib/demo-prompts.ts`, so the real backend
+// and the offline demo describe the same product.
 // ---------------------------------------------------------------------------
 
-model Prompt {
-  id       String @id @default(cuid())
-  title    String
-  body     String
-  tags     String @default("")
-  authorId String
+enum WorkspaceRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
 
-  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+model Workspace {
+  id   String @id @default(cuid())
+  name String
+  slug String @unique
+
+  members Membership[]
+  prompts Prompt[]
+  apiKeys ApiKey[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Membership {
+  id          String        @id @default(cuid())
+  userId      String
+  workspaceId String
+  role        WorkspaceRole @default(VIEWER)
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+}
+
+model ApiKey {
+  id          String @id @default(cuid())
+  workspaceId String
+  name        String
+  // Only the sha256 of the key is stored; the plaintext is shown once at
+  // creation and never again. `prefix` is the displayable head, e.g. "pops_a1b2".
+  hashedKey   String @unique
+  prefix      String
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([workspaceId])
+}
+
+model Prompt {
+  id          String @id @default(cuid())
+  workspaceId String
+  authorId    String
+  // Denormalized copy of the newest version's title so listings stay a single
+  // query. Rewritten every time a version is appended.
+  title       String
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  author    User            @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  versions  PromptVersion[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([workspaceId, updatedAt])
+  @@index([authorId])
+}
+
+// Prompts are append-only: editing a prompt writes a new version rather than
+// mutating the old one, which is what makes the history view possible.
+model PromptVersion {
+  id       String  @id @default(cuid())
+  promptId String
+  title    String
+  body     String
+  tags     String  @default("")
+  note     String  @default("")
+  authorId String?
+
+  prompt Prompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+  author User?  @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([promptId, createdAt])
   @@index([authorId])
 }

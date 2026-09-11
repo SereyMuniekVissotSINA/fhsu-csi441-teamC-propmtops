@@ -29,6 +29,20 @@ bun run dev               # http://localhost:3000
 
 Seeded login: `admin@promptops.local` / `password123`.
 
+## Browser demo
+
+Run `bun run dev` and open `http://localhost:3000/demo`, or follow the **Auth & Workspaces** and **Version Control** links on the landing page. Choose a demo identity: Alex is an owner, Sam an editor, and Jordan a viewer in Personal workspace. These are simulated accounts without passwords, real authentication, or sent invitations.
+
+Use **Workspace settings** to create a workspace, manage the three demo identities' membership roles, and reveal/copy/rotate a placeholder API key. Owners manage membership and keys, owners/editors save prompts, and viewers browse, preview, and compare. Sign out and choose another identity to test permissions. Demo keys do not authenticate API requests.
+
+Create, search, edit, and delete prompts, or preview `{{variables}}`. Every save or restore appends a snapshot with the demo author's name. The History tab compares any two saved versions side by side and restores previous content as a new version. `/demo?view=history` opens the version-control view directly after demo sign-in.
+
+On first visit to Personal workspace, the browser fetches sample prompts from `GET /api/demo/prompts`. The original `promptops.demo.v1` local-storage library is preserved as Personal workspace; other workspaces use separate keys prefixed `promptops.demo.v1.workspace.`. Account settings and the current demo session use `promptops.demo.accounts.v1`. Subsequent visits restore the session and saved libraries, including intentionally empty libraries. Demo changes stay in the browser and do not use the authenticated Prisma API or call an LLM.
+
+Loading failures offer retry, a temporary session without saving, or a confirmed reset. Failed storage writes retain the editor draft. Conflicting changes from another tab require a reload before saving. Clearing browser data removes the demo workspace.
+
+Run `bun run test` for role permissions, last-owner protection, workspace isolation, version history, persistence, variable substitution, and storage failure tests.
+
 ## Scripts
 
 | Command | What it does |
