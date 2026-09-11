@@ -1,15 +1,21 @@
+import Link from "next/link";
+
 const features = [
   {
     title: "Auth & Workspaces",
     description:
-      "Team-based access with role-based permissions and secure API keys.",
+      "Try demo sign-in, switch team workspaces, and explore owner, editor, and viewer permissions.",
     icon: "◉",
+    href: "/demo",
+    cta: "Try auth & workspaces",
   },
   {
     title: "Version Control",
     description:
-      "Every edit is an immutable snapshot. Revert to any version safely.",
+      "Save immutable snapshots, compare changes side by side, and restore earlier versions with an audit trail.",
     icon: "⌘",
+    href: "/demo?view=history",
+    cta: "Try version control",
   },
   {
     title: "Prompt CMS",
@@ -44,7 +50,7 @@ export default function Home() {
       <nav className="border-b border-zinc-800/70">
         <div className="mx-auto flex h-18 max-w-6xl items-center justify-between px-6">
           {/* Logo */}
-          <div className="flex items-center gap-3">
+          <Link href="/" className="flex items-center gap-3">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500 font-mono text-sm font-bold text-black">
               &gt;_
             </div>
@@ -52,17 +58,30 @@ export default function Home() {
             <span className="text-lg font-semibold tracking-tight">
               PromptOps
             </span>
-          </div>
+          </Link>
 
           {/* Navigation buttons */}
           <div className="flex items-center gap-3">
-            <button className="rounded-lg px-4 py-2 text-sm text-zinc-300 transition hover:text-white">
-              Sign In
-            </button>
+            <Link
+              href="#features"
+              className="rounded-lg px-4 py-2 text-sm text-zinc-300 transition hover:text-white"
+            >
+              Features
+            </Link>
 
-            <button className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-black transition hover:bg-emerald-400">
-              Get Started
-            </button>
+            <Link
+              href="/login"
+              className="rounded-lg px-4 py-2 text-sm text-zinc-300 transition hover:text-white"
+            >
+              Sign in
+            </Link>
+
+            <Link
+              href="/demo"
+              className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-black transition hover:bg-emerald-400"
+            >
+              Try Demo
+            </Link>
           </div>
         </div>
       </nav>
@@ -81,18 +100,38 @@ export default function Home() {
 
         {/* Hero buttons */}
         <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-          <button className="rounded-lg bg-emerald-500 px-6 py-3 text-sm font-semibold text-black transition hover:bg-emerald-400">
-            Start Free &gt;_
-          </button>
+          <Link
+            href="/demo"
+            className="rounded-lg bg-emerald-500 px-6 py-3 text-sm font-semibold text-black transition hover:bg-emerald-400"
+          >
+            Open Demo &gt;_
+          </Link>
 
-          <button className="rounded-lg border border-zinc-700 px-6 py-3 text-sm font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900">
-            Sign In
-          </button>
+          <Link
+            href="#features"
+            className="rounded-lg border border-zinc-700 px-6 py-3 text-sm font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900"
+          >
+            Explore Features
+          </Link>
         </div>
+        <p className="mt-4 text-xs text-zinc-500">
+          No account needed. Demo prompts are saved in your browser.
+        </p>
       </section>
 
       {/* Features */}
-      <section className="mx-auto max-w-6xl px-6 pb-24">
+      <section
+        id="features"
+        className="mx-auto max-w-6xl scroll-mt-8 px-6 pb-24"
+      >
+        <h2 className="mb-3 text-2xl font-semibold">
+          Built for the prompt lifecycle
+        </h2>
+        <p className="mb-8 text-sm leading-6 text-zinc-400">
+          Demo identities, workspace roles, prompt storage, version comparison,
+          and variable previews are ready to explore. Live authentication, LLM
+          calls, and analytics are planned.
+        </p>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {features.map((feature) => (
             <div
@@ -104,14 +143,20 @@ export default function Home() {
                   {feature.icon}
                 </span>
 
-                <h2 className="font-semibold text-zinc-100">
-                  {feature.title}
-                </h2>
+                <h2 className="font-semibold text-zinc-100">{feature.title}</h2>
               </div>
 
               <p className="mt-6 text-sm leading-6 text-zinc-400">
                 {feature.description}
               </p>
+              {feature.href && (
+                <Link
+                  href={feature.href}
+                  className="mt-5 inline-flex items-center gap-2 text-sm font-medium text-emerald-400 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-emerald-400"
+                >
+                  {feature.cta} <span aria-hidden="true">→</span>
+                </Link>
+              )}
             </div>
           ))}
         </div>
