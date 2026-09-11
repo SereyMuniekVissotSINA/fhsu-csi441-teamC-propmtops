@@ -40,10 +40,6 @@ yarn-error.log*
 # vercel
 .vercel
 
-# custom ignored file extensions
-*.codex
-*.claude
-
 # typescript
 *.tsbuildinfo
 next-env.d.ts
@@ -57,3 +53,4 @@ next-env.d.ts
 *.db
 *.db-journal
 
+/Documents/
