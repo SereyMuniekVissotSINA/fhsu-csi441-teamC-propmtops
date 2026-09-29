@@ -22,6 +22,7 @@ export default async function DashboardLayout({ children }: LayoutProps<"/dashbo
           </Link>
 
           <div className="flex items-center gap-3">
+            <Link href="/dashboard/explorer" className="rounded-lg px-3 py-2 text-sm text-emerald-400">Library & graph</Link>
             <Link
               href="/demo"
               className="rounded-lg px-4 py-2 text-sm text-zinc-300 transition hover:text-white"

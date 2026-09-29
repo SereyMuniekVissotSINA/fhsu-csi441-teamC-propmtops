@@ -43,6 +43,28 @@ Loading failures offer retry, a temporary session without saving, or a confirmed
 
 Run `bun run test` for role permissions, last-owner protection, workspace isolation, version history, persistence, variable substitution, and storage failure tests.
 
+## Database library and graph
+
+Sign in at `/login`, then open `/dashboard/explorer` (or **Library & graph** in
+the dashboard). Search, version selection, copying, and graph visualization use
+the authenticated workspace's SQLite records. Switch workspaces using the links
+above the library. Use **Open editor** to save changes and **Refresh library** to
+retrieve changes made in another tab.
+
+`/demo` and `/demo/explorer` remain browser-only sandboxes. Their local prompts are
+not automatically imported into the database.
+
+The local backend requires `DATABASE_URL` and `AUTH_SECRET` in `.env`, plus the
+Prisma migrations. Check them with `bunx --bun prisma migrate status`; apply
+existing pending migrations with `bunx --bun prisma migrate deploy`.
+GitHub and Google sign-in additionally require their credential pairs listed in
+`.env.example`. Password sign-in does not require either OAuth provider.
+
+AI execution, an MCP server, and token analytics are not implemented. Workspace
+API keys can be managed through the existing API, but prompt endpoints currently
+authenticate browser sessions, not bearer keys. Hosting is not configured by
+this local setup; SQLite requires persistent storage on the server.
+
 ## Scripts
 
 | Command | What it does |

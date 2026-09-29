@@ -244,6 +244,10 @@ export function DemoWorkspace({
               workspace.
             </p>
           </div>
+          <div className="flex flex-wrap gap-3">
+          <Link className={action} href="/demo/explorer" onClick={(event) => {
+            if (!window.dispatchEvent(new Event("promptops:before-context-change", { cancelable: true }))) event.preventDefault();
+          }}>Browse prompt library</Link>
           <button
             className={primary}
             disabled={loading || !!error || !canEdit}
@@ -251,6 +255,7 @@ export function DemoWorkspace({
           >
             <Plus size={16} /> New prompt
           </button>
+          </div>
         </div>
 
         {loading ? (

@@ -16,7 +16,15 @@ export async function isDatabaseReady(): Promise<boolean> {
 
   let ready: boolean;
   try {
-    await prisma.$queryRaw`SELECT 1`;
+    // Probe application tables too: SELECT 1 succeeds even before migrations.
+    await Promise.all([
+      prisma.user.findFirst({ select: { id: true } }),
+      prisma.workspace.findFirst({ select: { id: true } }),
+      prisma.membership.findFirst({ select: { id: true } }),
+      prisma.prompt.findFirst({ select: { id: true } }),
+      prisma.promptVersion.findFirst({ select: { id: true } }),
+      prisma.apiKey.findFirst({ select: { id: true } }),
+    ]);
     ready = true;
   } catch {
     // Missing file, unapplied migrations, bad DATABASE_URL — all mean the same
