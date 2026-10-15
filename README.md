@@ -5,6 +5,9 @@ diffs, and (now) actually run them against an LLM to see if they're any good.
 
 FHSU CSI 441 — Team C.
 
+Want to help? Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks, and
+pull request guidance.
+
 ## The stack
 
 Nothing exotic here — just a solid, boring-in-the-best-way set of tools:
