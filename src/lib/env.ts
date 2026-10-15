@@ -9,6 +9,7 @@ import { z } from "zod";
 // evaluation would take down every route that transitively imports `@/auth`.
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
+  DIRECT_URL: z.string().min(1).optional(),
   AUTH_SECRET: z.string().min(1),
   AUTH_URL: z.url().optional(),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -23,6 +24,7 @@ const envSchema = z.object({
 
 const result = envSchema.safeParse({
   DATABASE_URL: process.env.DATABASE_URL,
+  DIRECT_URL: process.env.DIRECT_URL,
   AUTH_SECRET: process.env.AUTH_SECRET,
   AUTH_URL: process.env.AUTH_URL,
   NODE_ENV: process.env.NODE_ENV,

@@ -1,15 +1,13 @@
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "@/generated/prisma/client";
 
-// Prisma 7 talks to the database through a driver adapter. For SQLite that is
-// better-sqlite3; swap this out (and the datasource in prisma/schema.prisma)
-// if the project ever moves to Postgres.
+// Prisma 7 talks to PostgreSQL through a driver adapter. Constructing the
+// adapter does not open a connection; pages that need the backend probe it in
+// backend-status.ts and show the setup panel if DATABASE_URL is absent/bad.
 const createPrismaClient = () =>
   new PrismaClient({
-    adapter: new PrismaBetterSqlite3({
-      url: process.env.DATABASE_URL ?? "file:./dev.db",
-    }),
+    adapter: new PrismaPg(process.env.DATABASE_URL ?? ""),
     log: process.env.NODE_ENV === "development" ? ["query", "warn", "error"] : ["error"],
   });
 

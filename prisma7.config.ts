@@ -8,9 +8,11 @@ export default defineConfig({
     seed: "bunx tsx prisma/seed.ts",
   },
   datasource: {
-    url: process.env["DATABASE_URL"],
+    // Some cloud providers expose a pooled URL for the app and a direct URL
+    // for migrations. A single DATABASE_URL still works for providers that do
+    // not make that distinction.
+    url: process.env["DIRECT_URL"] ?? process.env["DATABASE_URL"],
   },
 });
-
 
 

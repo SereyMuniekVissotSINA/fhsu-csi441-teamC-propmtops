@@ -54,3 +54,5 @@ next-env.d.ts
 *.db-journal
 
 /Documents/
+
+/SESSION_RECAP.md

@@ -9,7 +9,7 @@ FHSU CSI 441 — Team C.
 | Framework | Next.js (App Router, Turbopack) | 16.3.4 |
 | Language | TypeScript | 5.9 |
 | Runtime / package manager | Bun | 1.3.14 |
-| Database | SQLite via Prisma ORM | 7.10.0 |
+| Database | PostgreSQL via Prisma ORM | 7.10.0 |
 | UI | shadcn/ui + Tailwind CSS | 4.3.3 |
 | Client state | Zustand | 5.0 |
 | Server state | TanStack React Query | 5.102 |
@@ -22,7 +22,7 @@ FHSU CSI 441 — Team C.
 bun install
 cp .env.example .env      # then fill in AUTH_SECRET
 bunx auth secret          # writes a generated AUTH_SECRET for you
-bun run db:migrate        # creates dev.db and applies migrations
+bunx --bun prisma migrate deploy # applies migrations to DATABASE_URL
 bun run db:seed           # optional demo data
 bun run dev               # http://localhost:3000
 ```
@@ -47,23 +47,42 @@ Run `bun run test` for role permissions, last-owner protection, workspace isolat
 
 Sign in at `/login`, then open `/dashboard/explorer` (or **Library & graph** in
 the dashboard). Search, version selection, copying, and graph visualization use
-the authenticated workspace's SQLite records. Switch workspaces using the links
+the authenticated workspace's PostgreSQL records. Switch workspaces using the links
 above the library. Use **Open editor** to save changes and **Refresh library** to
 retrieve changes made in another tab.
 
 `/demo` and `/demo/explorer` remain browser-only sandboxes. Their local prompts are
 not automatically imported into the database.
 
-The local backend requires `DATABASE_URL` and `AUTH_SECRET` in `.env`, plus the
-Prisma migrations. Check them with `bunx --bun prisma migrate status`; apply
-existing pending migrations with `bunx --bun prisma migrate deploy`.
+The backend requires `DATABASE_URL` and `AUTH_SECRET` in `.env`, plus the Prisma
+migrations. `DATABASE_URL` must be a PostgreSQL URL from your cloud provider.
+Check it with `bunx --bun prisma migrate status`; apply existing pending
+migrations with `bunx --bun prisma migrate deploy`.
 GitHub and Google sign-in additionally require their credential pairs listed in
 `.env.example`. Password sign-in does not require either OAuth provider.
+
+For a new external database:
+
+1. Create a PostgreSQL database with your cloud provider and copy its connection
+   string. Put its pooled URL in `DATABASE_URL`. If the provider also supplies a
+   direct URL, put that in `DIRECT_URL`; Prisma uses it for migrations.
+2. Copy `.env.example` to `.env`, replace `DATABASE_URL`, and generate
+   `AUTH_SECRET` with `bunx auth secret`.
+3. Run `bunx --bun prisma migrate deploy` to create the tables.
+4. Optionally run `bun run db:seed`, then verify with
+   `bunx --bun prisma migrate status` and `bun run dev`.
+5. Add the same `DATABASE_URL` and `AUTH_SECRET` as server-side secrets in the
+   application host. Run `bunx --bun prisma migrate deploy` during deployment,
+   before starting the application.
+
+Do not commit `.env` or expose `DATABASE_URL` through a `NEXT_PUBLIC_` variable.
+The old local `prisma/dev.db` file, if present, is not imported automatically;
+keep it until any data you need has been copied into PostgreSQL.
 
 AI execution, an MCP server, and token analytics are not implemented. Workspace
 API keys can be managed through the existing API, but prompt endpoints currently
 authenticate browser sessions, not bearer keys. Hosting is not configured by
-this local setup; SQLite requires persistent storage on the server.
+this local setup.
 
 ## Scripts
 
@@ -99,7 +118,7 @@ src/
     ui/                shadcn components
   generated/prisma/    Prisma client output (gitignored)
   lib/
-    prisma.ts          Client singleton + better-sqlite3 driver adapter
+    prisma.ts          Client singleton + PostgreSQL driver adapter
     query-client.ts    React Query defaults, SSR-safe
     env.ts             Zod-validated environment variables
     validations.ts     Shared Zod schemas
@@ -109,10 +128,10 @@ src/
 
 ## Notes
 
-- **Prisma 7 needs a driver adapter.** SQLite goes through `@prisma/adapter-better-sqlite3`, wired up in `src/lib/prisma.ts`. Moving to Postgres means swapping that adapter and the `datasource` provider.
+- **Prisma 7 needs a driver adapter.** PostgreSQL goes through `@prisma/adapter-pg`, wired up in `src/lib/prisma.ts`.
 - **Auth is split in two files on purpose.** `proxy.ts` runs on the edge, where Prisma and bcryptjs cannot, so it only imports `auth.config.ts`. The Prisma adapter and credentials provider live in `auth.ts`, which only server code imports.
 - **Sessions are JWTs**, not database sessions — required when using a credentials provider.
-- **`bun pm trust`** has already been run for `better-sqlite3`, `esbuild`, and the Prisma engines. A fresh clone may need it again.
+- **`bun pm trust`** has already been run for `esbuild` and the Prisma engines. A fresh clone may need it again.
 
 ## VS Code
 
