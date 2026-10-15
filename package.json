@@ -2,13 +2,17 @@
   "name": "prompt-ops",
   "version": "0.1.0",
   "private": true,
+  "bin": {
+    "pops": "./src/cli/index.ts"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
     "start": "next start",
+    "pops": "bun src/cli/index.ts",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/lib/demo-prompts.test.ts src/lib/demo-accounts.test.ts src/lib/api-keys.test.ts src/lib/roles.test.ts src/lib/prompt-graph.test.ts",
+    "test": "node --import tsx --test src/lib/demo-prompts.test.ts src/lib/demo-accounts.test.ts src/lib/api-keys.test.ts src/lib/roles.test.ts src/lib/prompt-graph.test.ts src/lib/code-commits.test.ts src/cli/cli.test.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
