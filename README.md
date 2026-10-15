@@ -79,7 +79,45 @@ Do not commit `.env` or expose `DATABASE_URL` through a `NEXT_PUBLIC_` variable.
 The old local `prisma/dev.db` file, if present, is not imported automatically;
 keep it until any data you need has been copied into PostgreSQL.
 
-AI execution, an MCP server, and token analytics are not implemented. Workspace
+## OpenAI development testing
+
+For local OpenRouter testing through 9Router, set these in `.env`:
+
+```env
+LLM_BASE_URL="http://localhost:20128/v1"
+LLM_MODEL="openrouter/stepfun/step-3.5-flash:free"
+LLM_API_KEY="your-9router-api-key"
+```
+
+Use the key generated in 9Router; keep your upstream OpenRouter key configured
+inside 9Router. Copy model IDs from 9Router's `/v1/models` list. Restart
+`bun run dev`, then open `/demo`, select a prompt, choose **Preview**, fill in
+its variables, and click **Generate response**. This demo flow requires neither
+authentication nor PostgreSQL. The authenticated prompt editor also has a
+**Run test** action when the database is connected.
+`LLM_BASE_URL` selects Chat Completions through the router with a 4,096-token
+output cap. Unset it to use direct OpenAI below. Localhost refers to the
+machine running the Next.js server. Cloud-hosted apps cannot reach your laptop
+through this URL.
+
+Create an OpenAI API project/key at https://platform.openai.com/api-keys and
+configure API billing for that project. Add `OPENAI_API_KEY` and `OPENAI_MODEL`
+(a Responses-compatible model ID available to your project) to the existing
+`.env`, then restart `bun run dev`. Keep the key server-only and out of Git.
+
+With PostgreSQL connected and migrations applied, sign in as a workspace owner
+or editor, open a prompt under `/dashboard`, fill its variables, and click
+**Run with OpenAI**. The current draft is sent, including unsaved changes.
+The panel shows the response, model, elapsed time, and token usage. Runs are not
+persisted.
+
+This endpoint is disabled outside development. Each request is limited to
+16,000 input characters, 1,024 output tokens, and 60 seconds; there are no
+automatic retries. These limits do not impose a cumulative spending cap.
+Run the mocked integration checks with
+`node --import tsx --test src/lib/openai-run.test.ts` (no API charges).
+
+An MCP server and persistent token analytics are not implemented. Workspace
 API keys can be managed through the existing API, but prompt endpoints currently
 authenticate browser sessions, not bearer keys. Hosting is not configured by
 this local setup.

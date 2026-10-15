@@ -29,6 +29,9 @@ export function PromptEditor({
   const latest = versions[0];
   const [body, setBody] = useState(latest.body);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState("");
+  const [result, setResult] = useState<{ output: string; model: string; elapsedMs: number; incomplete: boolean; usage?: { input_tokens: number; output_tokens: number } | null } | null>(null);
   const [state, formAction, pending] = useActionState<FormState, FormData>(
     savePromptAction,
     {},
@@ -38,6 +41,27 @@ export function PromptEditor({
   // with no browser dependency (src/lib/demo-prompts.ts).
   const variables = useMemo(() => variableNames(body), [body]);
   const preview = useMemo(() => composePrompt(body, values), [body, values]);
+  const missingVariables = variables.some((name) => !values[name]?.trim());
+
+  async function runPrompt() {
+    setRunning(true);
+    setRunError("");
+    setResult(null);
+    try {
+      const response = await fetch(`/api/prompts/${id}/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: preview }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Could not run this prompt.");
+      setResult(data);
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "Could not run this prompt.");
+    } finally {
+      setRunning(false);
+    }
+  }
 
   return (
     <div className="grid gap-8 lg:grid-cols-[1fr_340px]">
@@ -131,7 +155,27 @@ export function PromptEditor({
         ) : null}
       </div>
 
-      <aside className={panel}>
+      {process.env.NODE_ENV === "development" && editable ? (
+        <section className={`${panel} space-y-3 lg:col-start-1 lg:row-start-2`}>
+          <h2 className="text-lg font-medium">Test with AI</h2>
+          <p className="text-sm text-zinc-400">Sends the current draft and variable values to your configured AI provider. Provider usage limits and pricing apply. Results are not saved.</p>
+          <button type="button" className={primary} onClick={runPrompt} disabled={running || missingVariables || !preview.trim() || preview.length > 16000}>
+            {running ? "Running…" : "Run test"}
+          </button>
+          {missingVariables ? <p className="text-sm text-zinc-400">Fill in every variable above to run.</p> : null}
+          {preview.length > 16000 ? <p className="text-sm text-zinc-400">Limit the composed prompt to 16,000 characters.</p> : null}
+          {runError ? <p role="alert" className="text-sm text-red-400">{runError}</p> : null}
+          <div aria-live="polite">
+            {result ? <>
+              <p className="text-xs text-zinc-400">{result.model} · {(result.elapsedMs / 1000).toFixed(1)}s{result.usage ? ` · ${result.usage.input_tokens} input / ${result.usage.output_tokens} output tokens` : ""}</p>
+              {result.incomplete ? <p className="text-sm text-amber-400">Response is incomplete; it may have reached the output limit.</p> : null}
+              <pre className="mt-3 whitespace-pre-wrap break-words text-sm">{result.output || "No text returned."}</pre>
+            </> : null}
+          </div>
+        </section>
+      ) : null}
+
+      <aside className={`${panel} lg:col-start-2 lg:row-start-1`}>
         <h2 className="mb-4 text-sm font-medium tracking-wide text-zinc-400 uppercase">
           History ({versions.length})
         </h2>

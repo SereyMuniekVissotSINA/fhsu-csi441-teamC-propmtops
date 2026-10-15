@@ -53,12 +53,43 @@ export function PromptEditor({
   const [values, setValues] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState("");
+  const [result, setResult] = useState<{
+    output: string;
+    model: string;
+    elapsedMs: number;
+    incomplete: boolean;
+    usage?: { input_tokens: number; output_tokens: number } | null;
+  } | null>(null);
   const isDirty =
     draft.title !== (latest?.title ?? "") ||
     draft.body !== (latest?.body ?? "") ||
     draft.tags !== (latest?.tags ?? "") ||
     !!note;
   const variables = variableNames(draft.body);
+  const preview = composePrompt(draft.body, values);
+  const missingVariables = variables.some((name) => !values[name]?.trim());
+
+  async function runPrompt() {
+    setRunning(true);
+    setRunError("");
+    setResult(null);
+    try {
+      const response = await fetch("/api/demo/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: preview }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Could not run this prompt.");
+      setResult(data);
+    } catch (reason) {
+      setRunError(messageOf(reason));
+    } finally {
+      setRunning(false);
+    }
+  }
 
   function change(key: keyof DemoContent, value: string) {
     if (!canEdit) return;
@@ -299,8 +330,7 @@ export function PromptEditor({
               </p>
             )}
             <pre className="min-h-48 whitespace-pre-wrap break-words rounded-lg border border-zinc-800 bg-[#080808] p-5 font-mono text-sm leading-7 text-zinc-300">
-              {composePrompt(draft.body, values) ||
-                "Your prompt preview will appear here."}
+              {preview || "Your prompt preview will appear here."}
             </pre>
             <button
               className={action}
@@ -308,7 +338,7 @@ export function PromptEditor({
               onClick={async () => {
                 try {
                   await navigator.clipboard.writeText(
-                    composePrompt(draft.body, values),
+                    preview,
                   );
                   setCopied(true);
                   setError("");
@@ -321,6 +351,62 @@ export function PromptEditor({
             >
               {copied ? "Copied!" : "Copy composed prompt"}
             </button>
+
+            <section className="space-y-3 rounded-lg border border-emerald-900 bg-emerald-950/10 p-5">
+              <div>
+                <h3 className="font-medium">Test with local AI</h3>
+                <p className="mt-2 text-sm leading-6 text-zinc-400">
+                  Send this composed prompt through the server&apos;s local 9Router
+                  connection. No account or database is required, and results
+                  are not saved.
+                </p>
+              </div>
+              <button
+                type="button"
+                className={primary}
+                onClick={runPrompt}
+                disabled={
+                  running || missingVariables || !preview.trim() || preview.length > 16000
+                }
+              >
+                {running ? "Generating…" : "Generate response"}
+              </button>
+              {missingVariables && (
+                <p className="text-sm text-zinc-400">
+                  Fill in every variable above before generating.
+                </p>
+              )}
+              {preview.length > 16000 && (
+                <p className="text-sm text-zinc-400">
+                  Limit the composed prompt to 16,000 characters.
+                </p>
+              )}
+              {runError && (
+                <p role="alert" className="text-sm text-red-400">
+                  {runError}
+                </p>
+              )}
+              <div aria-live="polite">
+                {result && (
+                  <>
+                    <p className="text-xs text-zinc-400">
+                      {result.model} · {(result.elapsedMs / 1000).toFixed(1)}s
+                      {result.usage
+                        ? ` · ${result.usage.input_tokens} input / ${result.usage.output_tokens} output tokens`
+                        : ""}
+                    </p>
+                    {result.incomplete && (
+                      <p className="mt-2 text-sm text-amber-400">
+                        The response may have reached the output limit.
+                      </p>
+                    )}
+                    <pre className="mt-3 whitespace-pre-wrap break-words rounded-lg border border-zinc-800 bg-[#080808] p-5 text-sm leading-7 text-zinc-200">
+                      {result.output || "No text returned."}
+                    </pre>
+                  </>
+                )}
+              </div>
+            </section>
           </div>
         )}
         {tab === "history" && (
