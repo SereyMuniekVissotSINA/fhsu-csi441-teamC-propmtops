@@ -6,6 +6,7 @@ import { composePrompt, variableNames } from "@/lib/demo-prompts";
 import { field, panel, primary } from "@/lib/ui";
 
 import { savePromptAction, type FormState } from "../../actions";
+import { CodeCommitLog, type CommitSummary } from "./code-commits";
 
 type Version = {
   id: string;
@@ -20,10 +21,12 @@ type Version = {
 export function PromptEditor({
   id,
   versions,
+  commits,
   editable,
 }: {
   id: string;
   versions: Version[];
+  commits: CommitSummary[];
   editable: boolean;
 }) {
   const latest = versions[0];
@@ -174,6 +177,23 @@ export function PromptEditor({
           </div>
         </section>
       ) : null}
+
+      <CodeCommitLog
+        promptId={id}
+        promptVersionId={latest.id}
+        initialCommits={commits}
+        input={preview}
+        editable={editable}
+        blocked={
+          missingVariables
+            ? "Fill in every variable above to generate."
+            : !preview.trim()
+              ? "Write a prompt before generating."
+              : preview.length > 16000
+                ? "Limit the composed prompt to 16,000 characters."
+                : undefined
+        }
+      />
 
       <aside className={`${panel} lg:col-start-2 lg:row-start-1`}>
         <h2 className="mb-4 text-sm font-medium tracking-wide text-zinc-400 uppercase">
