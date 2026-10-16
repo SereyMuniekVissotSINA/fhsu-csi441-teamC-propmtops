@@ -10,6 +10,7 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "pops": "bun src/cli/index.ts",
+    "demo:test": "bun scripts/demo-test.ts",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test src/lib/demo-prompts.test.ts src/lib/demo-accounts.test.ts src/lib/api-keys.test.ts src/lib/roles.test.ts src/lib/prompt-graph.test.ts src/lib/code-commits.test.ts src/cli/cli.test.ts",
