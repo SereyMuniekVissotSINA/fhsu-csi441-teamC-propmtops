@@ -24,6 +24,11 @@ export async function isDatabaseReady(): Promise<boolean> {
       prisma.prompt.findFirst({ select: { id: true } }),
       prisma.promptVersion.findFirst({ select: { id: true } }),
       prisma.apiKey.findFirst({ select: { id: true } }),
+      // The code-commit tables are probed for the same reason: the prompt page
+      // reads them, so a database still on the previous migration has to report
+      // itself as not ready rather than fail mid-render.
+      prisma.codeCommit.findFirst({ select: { id: true } }),
+      prisma.codeFile.findFirst({ select: { id: true } }),
     ]);
     ready = true;
   } catch {
