@@ -14,9 +14,44 @@ const responseSchema = z.object({
   usage: z.object({ input_tokens: z.number(), output_tokens: z.number() }).nullish(),
 });
 
+// The same two-provider resolution every run route needs: a local 9Router (or
+// any OpenAI-compatible server) when LLM_BASE_URL is set, otherwise OpenAI
+// directly. Returns null when neither is configured.
+export function resolveProvider(): { baseUrl?: string; key: string; model: string } | null {
+  const baseUrl = process.env.LLM_BASE_URL?.trim();
+  const key = (baseUrl ? process.env.LLM_API_KEY : process.env.OPENAI_API_KEY)?.trim() ?? "";
+  const model = (baseUrl ? process.env.LLM_MODEL : process.env.OPENAI_MODEL)?.trim();
+  if ((!baseUrl && !key) || !model) return null;
+  return { baseUrl, key, model };
+}
+
+export const PROVIDER_SETUP_MESSAGE =
+  "Configure LLM_MODEL for 9Router, or OPENAI_API_KEY and OPENAI_MODEL for direct OpenAI, then restart the development server.";
+
+/**
+ * Perform the request, turning a connection failure into an `LLM`-prefixed
+ * message the routes are willing to pass through. A timeout is rethrown
+ * untouched so callers can still answer 504.
+ */
+async function send(baseUrl: string | undefined, init: RequestInit): Promise<Response> {
+  const url = baseUrl
+    ? `${baseUrl.replace(/\/$/, "")}/chat/completions`
+    : "https://api.openai.com/v1/responses";
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") throw error;
+    throw new Error(
+      baseUrl
+        ? "LLM server is not reachable. Start your local model server (LLM_BASE_URL), or unset it to call OpenAI directly."
+        : "LLM provider is not reachable. Check your network connection.",
+    );
+  }
+}
+
 export async function runOpenAI(input: string, apiKey: string, model: string, baseUrl?: string) {
   const started = Date.now();
-  const response = await fetch(baseUrl ? `${baseUrl.replace(/\/$/, "")}/chat/completions` : "https://api.openai.com/v1/responses", {
+  const response = await send(baseUrl, {
     method: "POST",
     headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), "Content-Type": "application/json" },
     body: JSON.stringify(baseUrl
