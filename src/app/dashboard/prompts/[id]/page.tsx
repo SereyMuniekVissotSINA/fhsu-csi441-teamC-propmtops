@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 
 import { canEdit, requireSessionPage } from "@/lib/authz";
 import { prisma } from "@/lib/prisma";
+import { isAITestingEnabled, listPromptFiles } from "@/lib/prompt-files";
 
 import { PromptEditor } from "./editor";
 
@@ -60,6 +61,8 @@ export default async function PromptPage({
       <PromptEditor
         id={prompt.id}
         editable={canEdit(role)}
+        initialFiles={await listPromptFiles(prompt.id)}
+        aiTestingEnabled={isAITestingEnabled()}
         versions={prompt.versions.map((version) => ({
           id: version.id,
           title: version.title,

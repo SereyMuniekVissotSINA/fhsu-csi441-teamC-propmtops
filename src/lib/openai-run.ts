@@ -14,14 +14,14 @@ const responseSchema = z.object({
   usage: z.object({ input_tokens: z.number(), output_tokens: z.number() }).nullish(),
 });
 
-export async function runOpenAI(input: string, apiKey: string, model: string, baseUrl?: string) {
+export async function runOpenAI(input: string, apiKey: string, model: string, baseUrl?: string, options?: { maxOutputTokens?: number }) {
   const started = Date.now();
   const response = await fetch(baseUrl ? `${baseUrl.replace(/\/$/, "")}/chat/completions` : "https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), "Content-Type": "application/json" },
     body: JSON.stringify(baseUrl
-      ? { model, messages: [{ role: "user", content: input }], max_tokens: 4096, stream: false }
-      : { model, input, max_output_tokens: 1024, store: false }),
+      ? { model, messages: [{ role: "user", content: input }], max_tokens: options?.maxOutputTokens ?? 4096, stream: false }
+      : { model, input, max_output_tokens: options?.maxOutputTokens ?? 1024, store: false }),
     signal: AbortSignal.timeout(60_000),
     cache: "no-store",
   });
@@ -44,7 +44,7 @@ export async function runOpenAI(input: string, apiKey: string, model: string, ba
     }).parse(await response.json());
     const choice = data.choices[0];
     return { output: choice.message.content ?? choice.message.refusal ?? "", model: data.model,
-      incomplete: choice.finish_reason === "length", elapsedMs: Date.now() - started,
+      incomplete: choice.finish_reason !== "stop" || !!choice.message.refusal, elapsedMs: Date.now() - started,
       usage: data.usage ? { input_tokens: data.usage.prompt_tokens, output_tokens: data.usage.completion_tokens } : null };
   }
   const data = responseSchema.parse(await response.json());

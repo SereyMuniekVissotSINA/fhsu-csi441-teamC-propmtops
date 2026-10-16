@@ -155,10 +155,13 @@ With PostgreSQL wired up and migrations applied, sign in as a workspace
 owner or editor, open a prompt in `/dashboard`, fill in its variables, and
 click **Run with OpenAI**. It sends your current draft — unsaved edits and
 all — and shows you the response, the model, how long it took, and the token
-usage. Nothing gets saved; it's just a scratchpad for checking your work.
+usage. Text-only results are a scratchpad and are not saved. Selecting an
+attached file saves a separate revised file version (see below).
 
-This whole thing is development-only — it won't run in production. Every
-request is capped at 16,000 input characters, 1,024 output tokens, and 60
+AI testing is enabled in development. The authenticated editor can also run
+in production when `AI_TESTING_ENABLED=true`; the anonymous demo remains
+development-only. Text-only direct OpenAI requests are capped at 16,000 input
+characters, 1,024 output tokens, and 60
 seconds, with no automatic retries, so a bad prompt can't quietly burn
 through your budget (though the caps don't add up to a hard spending limit
 overall, so still keep an eye on your bill). Want to sanity-check the
@@ -170,6 +173,57 @@ Workspace API keys exist and can be managed through the API, but prompt
 endpoints only trust browser sessions right now, not bearer keys. And
 deployment/hosting is left as an exercise for whoever ships this.
 
+## File uploads and AI revisions
+
+This feature is available in the authenticated `/dashboard`, not the
+browser-only demo. Apply the new tables before opening the dashboard:
+
+```bash
+bunx --bun prisma migrate deploy
+bun run dev
+```
+
+Owners and editors can attach files while creating a prompt or upload more
+from its editor. Under **Files & versions**, select a file version, write the
+requested changes in the prompt, fill any variables, and click **Run AI &
+save revised file**. The AI receives the selected file's extracted content
+and the current prompt draft. A successful response creates a downloadable
+v2, v3, etc.; v1 remains the exact original upload. Any earlier version can
+be selected as the source for another revision. History records that source,
+the instruction, model, and summary. Viewers may preview and download files
+but cannot upload or run revisions.
+
+Supported files and limits:
+
+- UTF-8 code/text files, text-based `.pdf`, `.docx`, and `.xlsx`. Legacy
+  `.doc`/`.xls`, macros, embedded attachments, encrypted documents, and scanned
+  PDFs requiring OCR are not supported.
+- Up to three files per upload, 2 MB combined, and 24,000 extracted characters
+  per file. One selected file is revised per AI run.
+- PDFs: up to 50 pages. PDF/Word output is rebuilt from text; complex layout,
+  images, and rich formatting are not preserved.
+- Excel: up to 10 sheets, 1,000 rows and 100 columns per sheet. Output contains
+  literal cell values; formulas become displayed/cached values, and formatting,
+  charts, macros, and external connections are not retained.
+- Office archives are bounded to 10 MB uncompressed and 1,000 entries.
+
+Files and revisions are stored in PostgreSQL and scoped to the prompt's
+workspace. Deleting the prompt or workspace also deletes its attached files.
+Uploads are not sent to the AI until a run is requested. Do not upload secrets
+or content you are not allowed to share with the configured provider.
+File runs allow up to 16,384 output tokens, so they may cost more than text-only
+tests. Invalid, truncated, or failed responses do not create a revision.
+Generated code is never executed or automatically tested; review all output.
+
+Configure `LLM_BASE_URL`/`LLM_MODEL` (optional `LLM_API_KEY`) or
+`OPENAI_API_KEY`/`OPENAI_MODEL` as described above. For `bun run start`, set
+`AI_TESTING_ENABLED=true` before running the server to enable authenticated AI
+testing. Without it, uploaded files and history still work.
+
+Run `bun run test:files` for document round trips, original-byte preservation,
+upload validation, and mocked AI success/failure tests. These tests do not call
+a paid provider.
+
 ## Scripts
 
 | Command | What it does |
@@ -179,6 +233,7 @@ deployment/hosting is left as an exercise for whoever ships this.
 | `bun run start` | Serve the production build |
 | `bun run lint` | ESLint |
 | `bun run typecheck` | `tsc --noEmit` |
+| `bun run test:files` | File upload/revision and mocked provider tests |
 | `bun run db:migrate` | Create + apply a migration |
 | `bun run db:push` | Push schema without a migration |
 | `bun run db:seed` | Run `prisma/seed.ts` |

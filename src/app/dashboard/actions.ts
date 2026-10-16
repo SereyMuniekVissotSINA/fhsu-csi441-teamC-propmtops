@@ -6,6 +6,8 @@ import { redirect } from "next/navigation";
 import { signOut } from "@/auth";
 import { AuthzError, requireMember, requireSession } from "@/lib/authz";
 import { prisma } from "@/lib/prisma";
+import { prepareUploads } from "@/lib/file-codecs";
+import { FileInputError } from "@/lib/file-policy";
 import {
   createPromptSchema,
   createWorkspaceSchema,
@@ -19,6 +21,7 @@ export async function signOutAction() {
 }
 
 function messageOf(error: unknown) {
+  if (error instanceof FileInputError) return error.message;
   if (error instanceof AuthzError) return error.message;
   console.error(error);
   return "Something went wrong. Please try again.";
@@ -72,12 +75,14 @@ export async function createPromptAction(
   try {
     const { workspaceId, title, body, tags } = parsed.data;
     const { session } = await requireMember(workspaceId, "EDITOR");
+    const files = await prepareUploads(formData, session.user.id);
 
     const prompt = await prisma.prompt.create({
       data: {
         workspaceId,
         authorId: session.user.id,
         title,
+        files: { create: files },
         versions: {
           create: { title, body, tags, note: "Initial version", authorId: session.user.id },
         },
