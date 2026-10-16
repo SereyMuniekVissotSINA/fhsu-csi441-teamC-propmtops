@@ -105,7 +105,9 @@ Setting up a brand-new database? Here's the drill:
 1. Spin up a PostgreSQL database with your provider of choice and grab the
    connection string. Pooled URL goes in `DATABASE_URL`; if you also get a
    direct (non-pooled) URL, put that in `DIRECT_URL` — Prisma uses it for
-   migrations.
+   migrations. Change `sslmode=require` to `sslmode=verify-full` while you're
+   in there: the `pg` driver treats them identically today but warns on every
+   run, because `require` is set to mean weaker verification in `pg` v9.
 2. Copy `.env.example` to `.env`, drop in your `DATABASE_URL`, and generate
    `AUTH_SECRET` with `bunx auth secret`.
 3. `bunx --bun prisma migrate deploy` to create the tables.
@@ -166,9 +168,137 @@ plumbing without spending a cent? Run
 `node --import tsx --test src/lib/openai-run.test.ts` — it's all mocked.
 
 Not in here (yet): an MCP server and any kind of persistent token analytics.
-Workspace API keys exist and can be managed through the API, but prompt
-endpoints only trust browser sessions right now, not bearer keys. And
-deployment/hosting is left as an exercise for whoever ships this.
+And deployment/hosting is left as an exercise for whoever ships this.
+
+## Generating code — and keeping every version of it
+
+Prompts that write code have a second history worth keeping: the code itself.
+Hit **Generate code** on a prompt and the response gets parsed into files,
+diffed against the previous run, and committed — append-only, attached to the
+prompt, with a parent pointer. It is `git log` for whatever your local model
+keeps producing, except the log lives next to the prompt that caused it.
+
+Open a prompt from `/dashboard`, fill in its variables, and look for
+**Generated code** under the editor. Each run adds a commit:
+
+```
+c3  Update src/lib/parse.ts            2 files · 1 changed +18 −4
+    Alex · 2026-10-15 14:02 · nemotron-3-super-120b · 6.4s · 812 in / 1203 out
+    M src/lib/parse.ts   +18 −4      · src/lib/types.ts
+c2  Add 2 files                        2 files +41 −0
+c1  Add src/lib/parse.ts               1 file  +23 −0
+```
+
+Click a commit to see its files, with git's status letters — `A` added, `M`
+modified, `D` removed, `·` unchanged. Modified files get a **Show diff** button
+that compares them against the same file in the parent commit, three lines of
+context either side. Commit messages are optional; one gets written from the
+diff when you leave the box empty.
+
+A few things that matter:
+
+- **Nothing is written to your working tree.** Commits are database records you
+  read, diff, and copy out of. A bad generation cannot clobber a real file.
+- **Every commit stores exactly what produced it** — the composed prompt, the
+  raw response, the model, the elapsed time, and the token counts — so a run
+  stays reproducible after the prompt has moved on. The prompt version used is
+  linked too, which is how a commit survives later edits to the prompt.
+- **Runs that return no files still commit.** The raw response is kept so you
+  can see what the model did instead.
+- **A truncated response is labelled**, so a short file list is never mistaken
+  for the model's complete answer.
+
+To make parsing possible, a short output contract is appended to your prompt
+asking for one fenced code block per file, each fence starting with the file's
+path. The parser is forgiving — ` ```ts src/a.ts `, `path=`, `title="..."`,
+`` ```json:package.json ``, a bold or heading path above the fence, a leading
+`// src/a.ts` comment, or the path alone on the first line inside the block
+(which is what several local models do) all work. A bare path line names the
+file and is then dropped from its contents, since it is not part of the code. Unnamed blocks are skipped when the
+response named any of its files, since those are nearly always shell snippets
+sitting next to the real code. Paths are normalized and anything trying to
+climb out of the project root is rejected. Caps: 40 files per commit, 100,000
+characters per file.
+
+Generating needs an AI provider configured (see the section above) and, like
+the rest of the LLM plumbing, **runs in development only**. Reading the history
+has no such limit — commits outlive the environment that made them.
+
+New tables came with this, so apply migrations before using it:
+
+```bash
+bunx --bun prisma migrate deploy
+```
+
+| Endpoint | What it does |
+| --- | --- |
+| `POST /api/prompts/<id>/generate` | Run the prompt and commit the result (editor or owner, development only) |
+| `GET /api/prompts/<id>/commits` | The commit log: messages, stats, file paths and statuses |
+| `GET /api/prompts/<id>/commits/<commitId>` | One commit in full — file contents, prompt sent, raw response |
+| `GET /api/me` | Who the caller is, and which workspace a key reaches |
+
+`bun run test` covers the parsing, path safety, diffing, and commit
+classification; the provider seam is mocked in
+`node --import tsx --test src/lib/openai-run.test.ts`.
+
+## `pops` — the command line client
+
+Everything the dashboard does, from a terminal. It talks to a running app over
+the same HTTP API the browser uses, so there is one set of rules and the CLI
+cannot drift from the product.
+
+```bash
+bun run pops help                    # or `bun link` once, then just `pops`
+```
+
+### Signing in
+
+The CLI authenticates with a **workspace API key**, not your password. Create
+one in the web app (workspace settings → API keys; owners only), then:
+
+```bash
+bun run pops auth login --key pops_…       # stored in ~/.config/promptops/config.json, mode 600
+bun run pops whoami
+```
+
+`POPS_API_KEY` and `POPS_URL` override the stored values, which is what you
+want in CI or when pointing at another instance. `--key` and `--url` override
+both for a single command.
+
+A key is deliberately weaker than the person who made it: it reaches **one**
+workspace and acts as an `EDITOR` there. It can read and write prompts and
+generate code; it cannot add members, mint more keys, or create a workspace —
+those still require a browser session. Revoking a key in the web app takes
+effect on the next request. Writes made with a key are attributed to whoever
+created it, which is why a key minted before that was recorded can read but
+cannot create a prompt.
+
+### The workflow
+
+```bash
+pops workspaces                          # what you can reach
+pops prompts                             # id, title, versions, updated
+pops show slugify                        # current body, tags, {{variables}}
+pops new --title "Release notes" --file prompt.md
+pops edit slugify --body "…" --note "Tighten the wording"
+pops history slugify                     # v1, v2, v3 …
+pops history slugify v1..v3              # diff two versions
+pops run slugify -v name=Alex            # send it to the model, print the reply
+pops generate slugify -m "Add clamp"     # generate code and commit it
+pops log slugify                         # the commit log
+pops commit slugify c2 --diff            # one commit, as a diff
+pops commit slugify c2 --file src/lib/a.ts
+```
+
+A prompt can be named by id, by a 6-or-more character id prefix, or by part of
+its title — like abbreviating a git commit. When a name matches two prompts the
+CLI prints both and stops rather than guessing which one you meant.
+
+`--json` prints the raw API response for any command, so `pops log x --json |
+jq` works. Colour follows `NO_COLOR` and switches off when output is piped.
+
+`run` and `generate` reach a model, so they need the app in development mode
+with a provider configured — the same restriction the browser has.
 
 ## Scripts
 
@@ -177,6 +307,7 @@ deployment/hosting is left as an exercise for whoever ships this.
 | `bun run dev` | Dev server |
 | `bun run build` | `prisma generate` + production build |
 | `bun run start` | Serve the production build |
+| `bun run pops` | The CLI (`bun run pops help`) |
 | `bun run lint` | ESLint |
 | `bun run typecheck` | `tsc --noEmit` |
 | `bun run db:migrate` | Create + apply a migration |
@@ -189,7 +320,7 @@ deployment/hosting is left as an exercise for whoever ships this.
 
 ```
 prisma/
-  schema.prisma        Auth.js models + the Prompt domain model
+  schema.prisma        Auth.js models, the Prompt domain model, code commits
   seed.ts              Demo data
 src/
   auth.config.ts       Edge-safe Auth.js config (no Prisma/bcrypt)
@@ -199,12 +330,23 @@ src/
     api/auth/[...nextauth]/route.ts
     api/register/route.ts    Sign-up, hashes with bcryptjs
     api/prompts/route.ts     Reference CRUD route
+    api/prompts/[id]/generate/route.ts  Generate code and commit it
+    api/prompts/[id]/commits/          The generated-code log
   components/
     providers/         SessionProvider + QueryClientProvider
     ui/                shadcn components
   generated/prisma/    Prisma client output (gitignored)
+  cli/
+    index.ts           `pops` — commands and help
+    client.ts          HTTP layer, bearer key, error mapping
+    config.ts          ~/.config/promptops/config.json
+    format.ts          Tables, diffs, colour
+    resolve.ts         Name a prompt by id, prefix, or title
   lib/
+    api-auth.ts        Session or API key: one caller model for every route
     prisma.ts          Client singleton + PostgreSQL driver adapter
+    code-commits.ts    Response → files → commit, with the diff against the last run
+    code-diff.ts       Line diffing, shared by the API and the commit log UI
     query-client.ts    React Query defaults, SSR-safe
     env.ts             Zod-validated environment variables
     validations.ts     Shared Zod schemas
