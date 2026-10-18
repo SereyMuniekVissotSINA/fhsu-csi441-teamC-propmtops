@@ -114,14 +114,30 @@ jobs:
             '{chat_id: $chat, text: $text, parse_mode: "HTML", disable_web_page_preview: true}' \
             > payload.json
 
-          RESPONSE=$(curl -sS -X POST \
+          HTTP_CODE=$(curl -sS --retry 2 --retry-delay 2 --retry-all-errors \
+            -o telegram-response.json -w '%{http_code}' -X POST \
             -H 'Content-Type: application/json' \
             -d @payload.json \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage")
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage") || {
+              echo "::warning::Telegram request failed after retries. Skipping notification failure."
+              exit 0
+            }
+          RESPONSE=$(cat telegram-response.json)
+
+          if [[ "$HTTP_CODE" == 5* ]]; then
+            echo "::warning::Telegram API returned HTTP ${HTTP_CODE}. Skipping notification failure."
+            printf '%s\n' "$RESPONSE"
+            exit 0
+          fi
 
           # Telegram answers HTTP 200 with {"ok":false,...} on a bad chat id, so
           # a silent failure has to be turned into a red run explicitly.
           if [ "$(printf '%s' "$RESPONSE" | jq -r '.ok')" != "true" ]; then
+            if [[ "$(printf '%s' "$RESPONSE" | jq -r '.error_code // empty')" == 5* ]]; then
+              echo "::warning::Telegram API returned a transient error in response payload. Skipping notification failure."
+              printf '%s\n' "$RESPONSE"
+              exit 0
+            fi
             echo "Telegram rejected the message:"
             printf '%s\n' "$RESPONSE"
             exit 1
