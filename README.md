@@ -370,8 +370,41 @@ src/
 ## VS Code
 
 `.vscode/extensions.json` has the recommended extensions (ESLint, Prettier,
-Tailwind IntelliSense, Prisma, Bun) ready to go. Accept the prompt on first
-open, or run **Extensions: Show Recommended Extensions** if you missed it.
+Tailwind IntelliSense, Prisma, Bun, Copilot Chat) ready to go. Accept the
+prompt on first open, or run **Extensions: Show Recommended Extensions** if
+you missed it.
+
+## GitHub Copilot Chat (wired up, not working yet)
+
+The goal: manage prompts from Copilot Chat's agent mode — list them, read one,
+append a version — without leaving the editor.
+
+`.vscode/mcp.json` registers a `prompt-ops` MCP server for exactly that. **It
+does not work yet**, because the server it points at (`src/mcp/index.ts`)
+hasn't been written. Copilot will list the server and report that it failed to
+start. The config is committed first so the wiring is settled and reviewable
+before the server lands.
+
+What's already decided by that file:
+
+- **Transport is stdio**, launched as `bun src/mcp/index.ts` — the same shape
+  as the `pops` CLI in `package.json`.
+- **Credentials come from the environment**, using the names the CLI already
+  reads in `src/cli/config.ts`: `POPS_URL` and `POPS_API_KEY`. Environment
+  variables win over the stored config file there, so the same precedence
+  applies here.
+- **The key is never committed.** VS Code prompts for it once via the
+  `pops-api-key` input and keeps it in its own secret storage. Delete that
+  input and the `POPS_API_KEY` entry if you'd rather have the server fall back
+  to whatever `pops login` wrote to `~/.config/promptops/config.json` — that
+  file is owner-only on purpose, and the key never belongs in `.env`.
+
+To finish this, the server needs to exist and expose a few tools
+(`list_prompts`, `get_prompt`, `append_version`, `compose`) over the
+`requireCaller*` helpers in `src/lib/api-auth.ts`, authenticating with a
+workspace API key. `composePrompt` and `variableNames` in
+`src/lib/demo-prompts.ts` are pure and browser-independent, so variable
+substitution can be reused as-is.
 
 ## Push notifications (because who checks GitHub notifications)
 
