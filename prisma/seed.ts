@@ -1,12 +1,8 @@
 import bcrypt from "bcryptjs";
 
-import { demoSamples } from "../src/lib/demo-prompts";
+import { samplePrompts } from "../src/lib/prompts-core";
 import { prisma } from "../src/lib/prisma";
 
-// The seed mirrors the browser demo on purpose: `/demo` and `/dashboard` show
-// the same three prompts, so the offline fallback and the real backend are
-// recognisably the same product.
-//
 // One account per workspace role, so the permission walls can actually be
 // exercised in development: sign in as each and watch the UI change.
 //
@@ -75,7 +71,7 @@ async function main() {
   // Re-seeding should not stack duplicate prompts.
   await prisma.prompt.deleteMany({ where: { workspaceId: workspace.id } });
 
-  for (const sample of demoSamples) {
+  for (const sample of samplePrompts) {
     const versions = [...sample.versions].sort(
       (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
     );
@@ -104,7 +100,7 @@ async function main() {
 
   const versionCount = await prisma.promptVersion.count();
   console.log(
-    `Seeded workspace "${workspace.name}" with ${demoSamples.length} prompts ` +
+    `Seeded workspace "${workspace.name}" with ${samplePrompts.length} prompts ` +
       `and ${versionCount} versions.\n` +
       `All three accounts use the password "password123":\n` +
       `  OWNER   ${admin.email}\n` +

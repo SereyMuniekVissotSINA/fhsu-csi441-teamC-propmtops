@@ -1,12 +1,12 @@
-// Demo smoke test: exercises a running Prompt Ops app end to end over HTTP.
+// Smoke test: exercises a running Prompt Ops app end to end over HTTP.
 //
 //   bun run dev                                   # in another terminal
-//   bun scripts/demo-test.ts                      # public pages + auth walls
-//   POPS_API_KEY=pops_… bun scripts/demo-test.ts  # + full prompt lifecycle
+//   bun scripts/smoke-test.ts                     # public pages + auth walls
+//   POPS_API_KEY=pops_… bun scripts/smoke-test.ts # + full prompt lifecycle
 //
 // Flags: --url <base>  (default http://localhost:3000, or POPS_URL)
 //        --register    also create a throwaway account via /api/register
-//        --keep        leave the demo prompt in the database afterwards
+//        --keep        leave the test prompt in the database afterwards
 //
 // It talks to the app the same way the CLI does, so nothing here bypasses
 // authorization. The only writes are a prompt it deletes at the end (unless
@@ -83,7 +83,7 @@ function expectStatus(res: Res, ...ok: number[]) {
 }
 
 async function main() {
-  console.log(bold(`Prompt Ops demo test → ${BASE}`));
+  console.log(bold(`Prompt Ops smoke test → ${BASE}`));
 
   // ── 0. Is the app up? ──────────────────────────────────────────────────────
   try {
@@ -95,7 +95,7 @@ async function main() {
 
   // ── 1. Public pages ────────────────────────────────────────────────────────
   section("1. Public pages render");
-  for (const path of ["/", "/demo", "/demo?view=history", "/demo/explorer", "/login", "/register"]) {
+  for (const path of ["/", "/login", "/register"]) {
     await step(`GET ${path}`, async () => {
       const res = await call(path);
       expectStatus(res, 200);
@@ -106,18 +106,8 @@ async function main() {
     expectStatus(await call("/this-page-does-not-exist"), 404);
   });
 
-  // ── 2. Browser demo data ───────────────────────────────────────────────────
-  section("2. Browser demo starter prompts");
-  await step("GET /api/demo/prompts", async () => {
-    const res = await call("/api/demo/prompts");
-    expectStatus(res, 200);
-    expect(res.json?.schemaVersion === 1, "schemaVersion should be 1");
-    expect(Array.isArray(res.json.prompts) && res.json.prompts.length > 0, "no starter prompts");
-    return `${res.json.prompts.length} prompts`;
-  });
-
-  // ── 3. Security walls ──────────────────────────────────────────────────────
-  section("3. Authorization walls (no credentials)");
+  // ── 2. Security walls ──────────────────────────────────────────────────────
+  section("2. Authorization walls (no credentials)");
   await step("GET /api/me without login → 401", async () => {
     expectStatus(await call("/api/me"), 401);
   });
@@ -138,12 +128,12 @@ async function main() {
     return `HTTP ${res.status}`;
   });
 
-  // ── 4. Registration (opt-in: it creates a user) ────────────────────────────
-  section("4. Registration");
+  // ── 3. Registration (opt-in: it creates a user) ────────────────────────────
+  section("3. Registration");
   if (!flag("--register")) {
     skip("Register a new account", "pass --register to enable");
   } else {
-    const email = `demo+${Date.now()}@promptops.local`;
+    const email = `smoke+${Date.now()}@promptops.local`;
     const account = { name: "Demo Tester", email, password: "password123" };
     await step("New account → 201", async () => {
       const res = await call("/api/register", { method: "POST", body: JSON.stringify(account) });
@@ -163,8 +153,8 @@ async function main() {
     });
   }
 
-  // ── 5. Prompt lifecycle with an API key ────────────────────────────────────
-  section("5. Prompt version control (API key)");
+  // ── 4. Prompt lifecycle with an API key ────────────────────────────────────
+  section("4. Prompt version control (API key)");
   if (!KEY) {
     skip("Prompt lifecycle", "set POPS_API_KEY (create one in workspace settings → API keys)");
   } else {
@@ -201,7 +191,7 @@ async function main() {
       const res = await call("/api/prompts", {
         method: "POST",
         key: KEY,
-        body: JSON.stringify({ workspaceId, title: `Demo test ${new Date().toISOString()}`, body: v1, tags: "demo,test" }),
+        body: JSON.stringify({ workspaceId, title: `Smoke test ${new Date().toISOString()}`, body: v1, tags: "smoke,test" }),
       });
       expectStatus(res, 201);
       promptId = res.json.id;
@@ -215,7 +205,7 @@ async function main() {
         const res = await call(`/api/prompts/${promptId}`, {
           method: "PATCH",
           key: KEY,
-          body: JSON.stringify({ title: "Demo test (edited)", body: v2, tags: "demo,test", note: "Add sign-off" }),
+          body: JSON.stringify({ title: "Smoke test (edited)", body: v2, tags: "smoke,test", note: "Add sign-off" }),
         });
         expectStatus(res, 200);
         expect(res.json.versions[0].body === v2, "newest version should hold the edit");
@@ -256,9 +246,9 @@ async function main() {
       });
 
       if (flag("--keep")) {
-        skip("Delete demo prompt", `--keep; open ${BASE}/dashboard/prompts/${promptId}`);
+        skip("Delete test prompt", `--keep; open ${BASE}/dashboard/prompts/${promptId}`);
       } else {
-        await step("Delete demo prompt (cleanup)", async () => {
+        await step("Delete test prompt (cleanup)", async () => {
           expectStatus(await call(`/api/prompts/${promptId}`, { method: "DELETE", key: KEY }), 200);
           expectStatus(await call(`/api/prompts/${promptId}`, { key: KEY }), 404);
         });

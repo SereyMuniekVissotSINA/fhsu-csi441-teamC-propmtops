@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
-import { composePrompt, variableNames } from "@/lib/demo-prompts";
+import { composePrompt, variableNames } from "@/lib/prompts-core";
 
 import { CliError, createClient, type Client } from "./client";
 import {

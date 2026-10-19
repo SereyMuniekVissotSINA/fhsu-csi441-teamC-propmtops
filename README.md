@@ -33,7 +33,7 @@ bun install
 cp .env.example .env      # then fill in AUTH_SECRET
 bunx auth secret          # writes a generated AUTH_SECRET for you
 bunx --bun prisma migrate deploy # applies migrations to DATABASE_URL
-bun run db:seed           # optional demo data
+bun run db:seed           # optional sample data
 bun run dev               # http://localhost:3000
 ```
 
@@ -51,52 +51,11 @@ The owner matters: members and API keys are gated on `OWNER`, so a workspace
 without one can't be administered at all — and couldn't mint the key the CLI
 and the MCP server need.
 
-## Browser demo — no account required
-
-Run `bun run dev`, open `http://localhost:3000/demo`, and pick a demo identity
-off the landing page: Alex is an owner, Sam's an editor, and Jordan's a
-viewer, all hanging out in the Personal workspace. Nobody needs a real
-password here — these are pretend accounts for kicking the tires.
-
-**Workspace settings** lets you spin up a workspace, shuffle around who's an
-owner/editor/viewer, and reveal/copy/rotate a placeholder API key. Owners run
-the show (membership + keys), owners and editors can save prompts, and
-viewers get to browse, preview, and compare but not touch anything. Sign out
-and swap identities to feel the permission walls for yourself. Heads up:
-these demo keys are just for show and don't actually authenticate API
-requests.
-
-Create, search, edit, and delete prompts, or preview `{{variables}}` filled
-in live. Every save or restore drops a new snapshot with the demo author's
-name attached, so the History tab always has something to compare — pick any
-two versions and see them side by side, or restore an old one (which, true to
-form, just becomes a new version). Jump straight into that view with
-`/demo?view=history`.
-
-First time you land in the Personal workspace, the browser quietly fetches
-some starter prompts from `GET /api/demo/prompts`. The classic
-`promptops.demo.v1` local-storage library sticks around as the Personal
-workspace; every other workspace gets its own key under
-`promptops.demo.v1.workspace.`, and account/session info lives in
-`promptops.demo.accounts.v1`. Come back later and everything's still there —
-even the libraries you left intentionally empty. All of this stays local in
-your browser; it never touches the real database or calls an LLM.
-
-If something goes wrong loading your data, you get options: retry, carry on
-with a throwaway session, or reset with a confirmation first. A failed save
-won't eat your draft. Two tabs fighting over the same workspace? You'll need
-to reload before saving again. And yes, clearing your browser data wipes the
-demo workspace — it was never meant to be permanent.
-
-Run `bun run test` to check role permissions, last-owner protection,
-workspace isolation, version history, persistence, variable substitution, and
-what happens when storage misbehaves.
-
 ## The real database: library and graph view
 
 Sign in at `/login`, then head to `/dashboard/explorer` (or **Library &
 graph** from the dashboard) to see prompts backed by actual PostgreSQL
-records instead of browser storage. Search, pick versions, copy prompts, and
+records. Search, pick versions, copy prompts, and
 poke around the graph visualization. Switch workspaces from the links above
 the library, save changes from **Open editor**, and grab anything new with
 **Refresh library**.
@@ -107,9 +66,6 @@ along with every saved version and every generated-code commit attached to it
 — the database cascades them. It is the one irreversible action in the app, so
 viewers never see the button, and the server action re-checks for `EDITOR`
 regardless of what the UI rendered.
-
-`/demo` and `/demo/explorer` are still their own browser-only sandbox — handy
-for a quick look, but nothing you do there shows up in the database.
 
 You'll need `DATABASE_URL` and `AUTH_SECRET` in `.env`, plus the Prisma
 migrations applied. `DATABASE_URL` has to be a real PostgreSQL URL from
@@ -156,11 +112,9 @@ LLM_API_KEY="your-9router-api-key"
 
 Use the key 9Router generates for you, and keep your actual upstream
 OpenRouter key tucked away inside 9Router itself. Model IDs come straight
-from 9Router's `/v1/models` list. Restart `bun run dev`, open `/demo`, pick a
-prompt, hit **Preview**, fill in the variables, and click **Generate
-response**. No login, no database — this path works entirely on its own.
-The authenticated editor gets the same trick via its **Run test** button once
-the database's connected. One thing to know: `LLM_BASE_URL` routes through
+from 9Router's `/v1/models` list. Restart `bun run dev`, sign in, open a
+prompt from `/dashboard`, fill in its variables, and click **Run test**. One
+thing to know: `LLM_BASE_URL` routes through
 Chat Completions with a 4,096-token output cap, and it only works for things
 your own machine can reach — a cloud-hosted deployment can't dial back into
 your laptop. Unset it if you want to go straight to OpenAI instead.
@@ -328,6 +282,8 @@ with a provider configured — the same restriction the browser has.
 | `bun run pops` | The CLI (`bun run pops help`) |
 | `bun run lint` | ESLint |
 | `bun run typecheck` | `tsc --noEmit` |
+| `bun run test` | Pure-logic suites (`node:test`) |
+| `bun run smoke:test` | End-to-end checks against a running app |
 | `bun run db:migrate` | Create + apply a migration |
 | `bun run db:push` | Push schema without a migration |
 | `bun run db:seed` | Run `prisma/seed.ts` |
@@ -339,7 +295,7 @@ with a provider configured — the same restriction the browser has.
 ```
 prisma/
   schema.prisma        Auth.js models, the Prompt domain model, code commits
-  seed.ts              Demo data
+  seed.ts              Sample prompts + one account per role
 src/
   auth.config.ts       Edge-safe Auth.js config (no Prisma/bcrypt)
   auth.ts              Full config: Prisma adapter + credentials provider
@@ -351,6 +307,8 @@ src/
     api/prompts/[id]/generate/route.ts  Generate code and commit it
     api/prompts/[id]/commits/          The generated-code log
   components/
+    prompt-library.tsx Search, versions and graph over the workspace library
+    prompt-graph.tsx   Force-free graph of prompts, tags and variables
     providers/         SessionProvider + QueryClientProvider
     ui/                shadcn components
   generated/prisma/    Prisma client output (gitignored)
@@ -362,6 +320,7 @@ src/
     resolve.ts         Name a prompt by id, prefix, or title
   lib/
     api-auth.ts        Session or API key: one caller model for every route
+    prompts-core.ts    Pure prompt helpers + sample data, shared by app/CLI/seed
     prisma.ts          Client singleton + PostgreSQL driver adapter
     code-commits.ts    Response → files → commit, with the diff against the last run
     code-diff.ts       Line diffing, shared by the API and the commit log UI
@@ -421,8 +380,12 @@ To finish this, the server needs to exist and expose a few tools
 (`list_prompts`, `get_prompt`, `append_version`, `compose`) over the
 `requireCaller*` helpers in `src/lib/api-auth.ts`, authenticating with a
 workspace API key. `composePrompt` and `variableNames` in
-`src/lib/demo-prompts.ts` are pure and browser-independent, so variable
+`src/lib/prompts-core.ts` are pure and browser-independent, so variable
 substitution can be reused as-is.
+
+Both of those live on `feat/code-commits-and-cli`, which hasn't been merged —
+on `main` the prompt routes still trust browser sessions only, so there is no
+bearer-key path for an MCP server to call.
 
 ## Push notifications (because who checks GitHub notifications)
 

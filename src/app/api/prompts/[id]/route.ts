@@ -29,8 +29,7 @@ export async function GET(request: Request, { params }: RouteContext<"/api/promp
 }
 
 // Editing appends a version rather than mutating the current one — that is what
-// makes the history view possible, and it mirrors `appendVersion` in
-// `src/lib/demo-prompts.ts`.
+// makes the history view possible.
 export async function PATCH(request: Request, { params }: RouteContext<"/api/prompts/[id]">) {
   try {
     const { id } = await params;

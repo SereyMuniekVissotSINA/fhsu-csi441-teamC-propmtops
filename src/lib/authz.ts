@@ -13,9 +13,9 @@ export { atLeast, canEdit, wouldOrphanWorkspace };
 // The one place workspace role rules live. Routes and pages call these instead
 // of re-deriving "is this person allowed to..." each time.
 //
-// These mirror the rules the browser demo already enforces in
-// `src/lib/demo-accounts.ts` — most importantly the last-owner guard, which is
-// the rule that is easy to get wrong.
+// The rules themselves live in `src/lib/roles.ts`, kept import-free so they
+// stay unit-testable — most importantly the last-owner guard, which is the rule
+// that is easy to get wrong.
 
 /** Thrown by the `require*` helpers so route handlers can map it to a status. */
 export class AuthzError extends Error {

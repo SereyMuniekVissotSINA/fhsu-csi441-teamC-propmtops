@@ -1,55 +1,30 @@
-import { z } from "zod";
+// Pure prompt logic, shared by the dashboard, the `pops` CLI, the graph view
+// and the database seed.
+//
+// This used to be `demo-prompts.ts`, back when the browser demo was the only
+// surface that had prompts at all. The demo is gone, but these functions never
+// depended on it: they are string and shape helpers with no browser, Prisma or
+// environment access, which is exactly why a server route, a client component
+// and a Node script can all import them.
 
-export const DEMO_STORAGE_KEY = "promptops.demo.v1";
+/** The editable fields of a prompt — what a form collects. */
+export type PromptContent = { title: string; body: string; tags: string };
 
-export const demoContentSchema = z.object({
-  title: z.string().trim().min(1, "Give your prompt a title.").max(120),
-  body: z.string().trim().min(1, "Write some prompt content.").max(20000),
-  tags: z.string().trim().max(200),
-});
+/**
+ * One saved revision. `createdAt` is an ISO string rather than a Date because
+ * these records cross the server/client boundary, where Dates do not survive.
+ */
+export type PromptVersionRecord = PromptContent & {
+  id: string;
+  createdAt: string;
+  note: string;
+  author?: string;
+};
 
-const versionSchema = demoContentSchema.extend({
-  id: z.string().min(1),
-  createdAt: z.iso.datetime(),
-  note: z.string().max(240),
-  author: z.string().min(1).max(160).optional(),
-});
+/** A prompt and its history, oldest version first. */
+export type PromptRecord = { id: string; versions: PromptVersionRecord[] };
 
-export const demoPromptSchema = z.object({
-  id: z.string().min(1),
-  versions: z.array(versionSchema).min(1),
-});
-
-export const demoStoreSchema = z.object({
-  schemaVersion: z.literal(1),
-  prompts: z.array(demoPromptSchema),
-});
-
-export type DemoContent = z.infer<typeof demoContentSchema>;
-export type DemoVersion = z.infer<typeof versionSchema>;
-export type DemoPrompt = z.infer<typeof demoPromptSchema>;
-
-export function appendVersion(
-  prompt: DemoPrompt,
-  content: DemoContent,
-  note = "Updated prompt",
-  author?: string,
-): DemoPrompt {
-  return {
-    ...prompt,
-    versions: [
-      ...prompt.versions,
-      {
-        ...demoContentSchema.parse(content),
-        id: crypto.randomUUID(),
-        createdAt: new Date().toISOString(),
-        note,
-        ...(author ? { author } : {}),
-      },
-    ],
-  };
-}
-
+/** The `{{variable}}` names in a body, in first-seen order, without duplicates. */
 export function variableNames(body: string) {
   return [
     ...new Set(
@@ -61,6 +36,12 @@ export function variableNames(body: string) {
   ];
 }
 
+/**
+ * Fill `{{variable}}` placeholders from `values`.
+ *
+ * An unfilled or empty placeholder is left standing rather than replaced with
+ * a blank, so a half-filled preview still shows what it is still waiting for.
+ */
 export function composePrompt(body: string, values: Record<string, string>) {
   return body.replace(
     /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g,
@@ -68,7 +49,11 @@ export function composePrompt(body: string, values: Record<string, string>) {
   );
 }
 
-export const demoSamples: DemoPrompt[] = [
+/**
+ * Starter prompts for `prisma/seed.ts`, so a fresh database has a library with
+ * real version history to look at instead of one empty workspace.
+ */
+export const samplePrompts: PromptRecord[] = [
   {
     id: "customer-support",
     versions: [

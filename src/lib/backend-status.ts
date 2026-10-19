@@ -2,7 +2,7 @@ import { isAuthConfigured } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 
 // During the dev phase the app has to stay usable with no database and no
-// secrets: `/` and `/demo` must render regardless. Pages that need Prisma ask
+// secrets: `/` must render regardless. Pages that need Prisma ask
 // here first and show a "not configured" panel instead of throwing.
 
 let cached: { ready: boolean; checkedAt: number } | undefined;

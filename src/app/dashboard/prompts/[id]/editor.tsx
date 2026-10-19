@@ -2,7 +2,7 @@
 
 import { useActionState, useMemo, useState } from "react";
 
-import { composePrompt, variableNames } from "@/lib/demo-prompts";
+import { composePrompt, variableNames } from "@/lib/prompts-core";
 import { field, panel, primary } from "@/lib/ui";
 
 import { savePromptAction, type FormState } from "../../actions";
@@ -40,8 +40,8 @@ export function PromptEditor({
     {},
   );
 
-  // Reused from the demo rather than reimplemented — both are pure functions
-  // with no browser dependency (src/lib/demo-prompts.ts).
+  // Shared with the CLI rather than reimplemented — both are pure functions
+  // with no browser dependency (src/lib/prompts-core.ts).
   const variables = useMemo(() => variableNames(body), [body]);
   const preview = useMemo(() => composePrompt(body, values), [body, values]);
   const missingVariables = variables.some((name) => !values[name]?.trim());
