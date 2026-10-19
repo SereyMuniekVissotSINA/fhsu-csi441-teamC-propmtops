@@ -339,12 +339,15 @@ src/
     providers/         SessionProvider + QueryClientProvider
     ui/                shadcn components
   generated/prisma/    Prisma client output (gitignored)
+  mcp/
+    index.ts           `prompt-ops` MCP server for Copilot Chat (stdio)
   cli/
     index.ts           `pops` — commands and help
-    client.ts          HTTP layer, bearer key, error mapping
+    client.ts          HTTP layer, bearer key or session cookie, error mapping
     config.ts          ~/.config/promptops/config.json
+    session.ts         Password sign-in through Auth.js, for the owner-only routes
     format.ts          Tables, diffs, colour
-    resolve.ts         Name a prompt by id, prefix, or title
+    resolve.ts         Name a prompt by id, prefix, or title — or a key
   lib/
     api-auth.ts        Session or API key: one caller model for every route
     prompts-core.ts    Pure prompt helpers + sample data, shared by app/CLI/seed
@@ -378,41 +381,69 @@ Tailwind IntelliSense, Prisma, Bun, Copilot Chat) ready to go. Accept the
 prompt on first open, or run **Extensions: Show Recommended Extensions** if
 you missed it.
 
-## GitHub Copilot Chat (wired up, not working yet)
+## GitHub Copilot Chat — the MCP server
 
-The goal: manage prompts from Copilot Chat's agent mode — list them, read one,
-append a version — without leaving the editor.
+Manage prompts from Copilot Chat's agent mode: list them, read one, save a new
+one, append a version, fill in variables — without leaving the editor.
 
-`.vscode/mcp.json` registers a `prompt-ops` MCP server for exactly that. **It
-does not work yet**, because the server it points at (`src/mcp/index.ts`)
-hasn't been written. Copilot will list the server and report that it failed to
-start. The config is committed first so the wiring is settled and reviewable
-before the server lands.
+`.vscode/mcp.json` registers a `prompt-ops` server; `src/mcp/index.ts` is it.
 
-What's already decided by that file:
+```bash
+bun run mcp        # stdio on stdin/stdout — only useful to an MCP client
+```
 
-- **Transport is stdio**, launched as `bun src/mcp/index.ts` — the same shape
-  as the `pops` CLI in `package.json`.
-- **Credentials come from the environment**, using the names the CLI already
-  reads in `src/cli/config.ts`: `POPS_URL` and `POPS_API_KEY`. Environment
-  variables win over the stored config file there, so the same precedence
-  applies here.
-- **The key is never committed.** VS Code prompts for it once via the
-  `pops-api-key` input and keeps it in its own secret storage. Delete that
-  input and the `POPS_API_KEY` entry if you'd rather have the server fall back
-  to whatever `pops login` wrote to `~/.config/promptops/config.json` — that
-  file is owner-only on purpose, and the key never belongs in `.env`.
+### Using it from VS Code
 
-To finish this, the server needs to exist and expose a few tools
-(`list_prompts`, `get_prompt`, `append_version`, `compose`) over the
-`requireCaller*` helpers in `src/lib/api-auth.ts`, authenticating with a
-workspace API key. `composePrompt` and `variableNames` in
-`src/lib/prompts-core.ts` are pure and browser-independent, so variable
-substitution can be reused as-is.
+1. Start the app: `bun run dev`. The server is a client of the HTTP API, so
+   nothing works without it running.
+2. Have a key: `pops auth login --email you@…` then `pops keys create --save`.
+3. Open the Command Palette → **MCP: List Servers** → `prompt-ops` → **Start**.
+   VS Code asks for the key once (the `pops-api-key` input) and keeps it in its
+   own secret storage.
+4. In Copilot Chat, switch to **Agent** mode and check the tools picker for the
+   five `prompt-ops` tools.
 
-Both of those live on `feat/code-commits-and-cli`, which hasn't been merged —
-on `main` the prompt routes still trust browser sessions only, so there is no
-bearer-key path for an MCP server to call.
+### The tools
+
+| Tool | What it does |
+| --- | --- |
+| `list_prompts` | id, title, version count, workspace. `workspace` narrows it |
+| `get_prompt` | current body, tags, `{{variables}}`, and the version history |
+| `create_prompt` | saves a new prompt, so one refined in the editor is kept |
+| `append_version` | appends a version; omitted fields carry forward |
+| `compose` | fills `{{variables}}` and returns the text — stores nothing |
+
+A prompt is named the way the CLI names one: id, a 6-or-more character id
+prefix, or part of its title. Ambiguity is an error listing the candidates,
+never a guess — an agent that picked one at random would append a version to
+the wrong prompt, and that cannot be undone.
+
+### What it deliberately does not expose
+
+- **`run` and `generate`.** They reach a model, cost money, and are
+  development-only by design. The caller is already an agent with its own
+  model.
+- **Members, keys, and deleting a prompt.** A workspace key is an `EDITOR` and
+  cannot do the first two; deletion is the one irreversible operation in the
+  product and is not something an agent should reach for on its own.
+
+### How it is built
+
+- **It is a client of the web app, not a second way into the database.** Every
+  tool goes out over the same HTTP API the dashboard and CLI use, so workspace
+  scoping, the append-only rules and authorship stay where they are enforced.
+  A Prisma client here would duplicate the rules and would need database
+  credentials in an editor's environment — exactly what the API key avoids.
+- **Credentials come from the environment**, using the names the CLI reads in
+  `src/cli/config.ts`: `POPS_URL` and `POPS_API_KEY`. It reuses
+  `src/cli/client.ts`, so if `pops whoami` works, so does this — and with no
+  environment at all it falls back to `~/.config/promptops/config.json`. The
+  key never belongs in `.env`.
+- **stdout is the JSON-RPC channel.** Diagnostics go to stderr; a stray
+  `console.log` would corrupt the stream and the client would report a
+  protocol error.
+- **A failed call returns `isError` with the server's own message**, so the
+  agent can relay "API key has been revoked." instead of "the tool broke".
 
 ## Push notifications (because who checks GitHub notifications)
 
