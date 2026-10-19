@@ -228,25 +228,49 @@ bun run pops help                    # or `bun link` once, then just `pops`
 
 ### Signing in
 
-The CLI authenticates with a **workspace API key**, not your password. Create
-one in the web app (workspace settings → API keys; owners only), then:
+Day to day the CLI authenticates with a **workspace API key**. From a cold
+start you have no key, so sign in with your password once and mint one:
 
 ```bash
-bun run pops auth login --key pops_…       # stored in ~/.config/promptops/config.json, mode 600
+bun run pops auth login --email owner@example.com   # prompts for the password, no echo
+bun run pops keys create --name "my laptop" --save  # prints the key once, stores it
 bun run pops whoami
 ```
 
+Both credentials live in `~/.config/promptops/config.json`, mode 600. If you
+already hold a key, `pops auth login --key pops_…` stores it without a
+password.
+
 `POPS_API_KEY` and `POPS_URL` override the stored values, which is what you
 want in CI or when pointing at another instance. `--key` and `--url` override
-both for a single command.
+both for a single command. `POPS_PASSWORD` and `--password` skip the password
+prompt for scripts — prefer the prompt, so the password stays out of your shell
+history and out of `ps`.
 
 A key is deliberately weaker than the person who made it: it reaches **one**
 workspace and acts as an `EDITOR` there. It can read and write prompts and
 generate code; it cannot add members, mint more keys, or create a workspace —
-those still require a browser session. Revoking a key in the web app takes
-effect on the next request. Writes made with a key are attributed to whoever
-created it, which is why a key minted before that was recorded can read but
-cannot create a prompt.
+those still require a browser session. That is why `pops keys` is the one group
+of commands that uses the session cookie rather than the key: a key that could
+mint a key would be an escalation path, so the CLI signs in as a person
+instead, through Auth.js's own endpoints. Writes made with a key are attributed
+to whoever created it, which is why a key minted before that was recorded can
+read but cannot create a prompt.
+
+### Managing keys
+
+Owners only, and only after `auth login --email`.
+
+```bash
+pops keys                                # prefix, name, created, last used, status
+pops keys create --name "ci" --save      # shown once; only its hash is stored
+pops keys revoke ci                      # by name, prefix, or id
+```
+
+A key is revoked, never deleted, so the listing stays an audit of what was
+issued; revocation takes effect on the next request. The key this CLI is
+holding is marked `*` in the listing, so you can see before you revoke it that
+you are about to log your own terminal out.
 
 ### The workflow
 
