@@ -37,8 +37,19 @@ bun run db:seed           # optional demo data
 bun run dev               # http://localhost:3000
 ```
 
-Seeded login: `admin@promptops.local` / `password123`. (Please don't use this
-password for anything you actually care about.)
+The seed creates one account per workspace role, so you can feel the
+permission walls by signing in as each. All three use `password123` — please
+don't use that for anything you actually care about.
+
+| Role | Email | Can |
+| --- | --- | --- |
+| `OWNER` | `admin@promptops.local` | everything, including members and API keys |
+| `EDITOR` | `editor@promptops.local` | create, edit and delete prompts |
+| `VIEWER` | `viewer@promptops.local` | browse and compare, nothing else |
+
+The owner matters: members and API keys are gated on `OWNER`, so a workspace
+without one can't be administered at all — and couldn't mint the key the CLI
+and the MCP server need.
 
 ## Browser demo — no account required
 
