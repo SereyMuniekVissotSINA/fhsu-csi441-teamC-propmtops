@@ -129,10 +129,13 @@ With PostgreSQL wired up and migrations applied, sign in as a workspace
 owner or editor, open a prompt in `/dashboard`, fill in its variables, and
 click **Run with OpenAI**. It sends your current draft — unsaved edits and
 all — and shows you the response, the model, how long it took, and the token
-usage. Nothing gets saved; it's just a scratchpad for checking your work.
+usage. Text-only results are a scratchpad and are not saved. Selecting an
+attached file saves a separate revised file version (see below).
 
-This whole thing is development-only — it won't run in production. Every
-request is capped at 16,000 input characters, 1,024 output tokens, and 60
+AI testing is enabled in development. The authenticated editor can also run
+in production when `AI_TESTING_ENABLED=true`; the anonymous demo remains
+development-only. Text-only direct OpenAI requests are capped at 16,000 input
+characters, 1,024 output tokens, and 60
 seconds, with no automatic retries, so a bad prompt can't quietly burn
 through your budget (though the caps don't add up to a hard spending limit
 overall, so still keep an eye on your bill). Want to sanity-check the

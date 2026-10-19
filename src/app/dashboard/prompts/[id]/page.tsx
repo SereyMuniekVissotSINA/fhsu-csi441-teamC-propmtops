@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { canEdit, requireSessionPage } from "@/lib/authz";
 import { commitStats } from "@/lib/code-commits";
 import { prisma } from "@/lib/prisma";
+import { isAITestingEnabled, listPromptFiles } from "@/lib/prompt-files";
 
 import { DeletePrompt } from "./delete-prompt";
 import { PromptEditor } from "./editor";
@@ -68,6 +69,8 @@ export default async function PromptPage({
     },
   });
 
+  const files = await listPromptFiles(prompt.id);
+
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
       <nav className="mb-6 text-sm text-zinc-500">
@@ -84,6 +87,8 @@ export default async function PromptPage({
       <PromptEditor
         id={prompt.id}
         editable={canEdit(role)}
+        initialFiles={files}
+        aiTestingEnabled={isAITestingEnabled()}
         commits={commits.map((commit) => ({
           id: commit.id,
           sequence: commit.sequence,
