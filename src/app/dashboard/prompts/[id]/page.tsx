@@ -6,6 +6,7 @@ import { canEdit, requireSessionPage } from "@/lib/authz";
 import { commitStats } from "@/lib/code-commits";
 import { prisma } from "@/lib/prisma";
 
+import { DeletePrompt } from "./delete-prompt";
 import { PromptEditor } from "./editor";
 
 export const metadata: Metadata = {
@@ -110,6 +111,16 @@ export default async function PromptPage({
           authorName: version.author?.name ?? null,
         }))}
       />
+
+      {canEdit(role) && (
+        <section className="mt-10 border-t border-zinc-800 pt-6">
+          <h2 className="mb-1 text-sm font-medium text-zinc-300">Danger zone</h2>
+          <p className="mb-4 text-xs text-zinc-500">
+            Removes this prompt and its history from the database.
+          </p>
+          <DeletePrompt id={prompt.id} title={prompt.title} />
+        </section>
+      )}
     </main>
   );
 }

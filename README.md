@@ -90,6 +90,13 @@ poke around the graph visualization. Switch workspaces from the links above
 the library, save changes from **Open editor**, and grab anything new with
 **Refresh library**.
 
+Need to clear something out? Open a prompt and scroll to **Danger zone** at
+the bottom of the editor. **Delete prompt** asks once, then removes the prompt
+along with every saved version and every generated-code commit attached to it
+— the database cascades them. It is the one irreversible action in the app, so
+viewers never see the button, and the server action re-checks for `EDITOR`
+regardless of what the UI rendered.
+
 `/demo` and `/demo/explorer` are still their own browser-only sandbox — handy
 for a quick look, but nothing you do there shows up in the database.
 

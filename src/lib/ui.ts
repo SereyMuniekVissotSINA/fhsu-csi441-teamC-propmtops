@@ -15,6 +15,12 @@ export const primary = cn(
   "border-emerald-500 bg-emerald-500 text-black hover:bg-emerald-400",
 );
 
+/** For destructive controls, so "delete" never looks like "save". */
+export const danger = cn(
+  action,
+  "border-red-900 text-red-300 hover:border-red-700 hover:bg-red-950/40",
+);
+
 export const field =
   "w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400";
 
