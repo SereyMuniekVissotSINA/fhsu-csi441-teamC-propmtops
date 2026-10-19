@@ -3,9 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { canEdit, requireSessionPage } from "@/lib/authz";
-import { commitStats } from "@/lib/code-commits";
 import { prisma } from "@/lib/prisma";
-import { isAITestingEnabled, listPromptFiles } from "@/lib/prompt-files";
 
 import { DeletePrompt } from "./delete-prompt";
 import { PromptEditor } from "./editor";
@@ -47,30 +45,6 @@ export default async function PromptPage({
 
   const role = prompt.workspace.members[0]?.role ?? "VIEWER";
 
-  // The generated-code history, newest first. File contents are left out here
-  // and fetched per commit by the log, so opening a prompt with a long history
-  // does not ship every file it ever produced.
-  const commits = await prisma.codeCommit.findMany({
-    where: { promptId: prompt.id },
-    orderBy: { sequence: "desc" },
-    include: {
-      author: { select: { name: true } },
-      files: {
-        orderBy: { path: "asc" },
-        select: {
-          path: true,
-          hash: true,
-          language: true,
-          change: true,
-          added: true,
-          removed: true,
-        },
-      },
-    },
-  });
-
-  const files = await listPromptFiles(prompt.id);
-
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
       <nav className="mb-6 text-sm text-zinc-500">
@@ -87,24 +61,6 @@ export default async function PromptPage({
       <PromptEditor
         id={prompt.id}
         editable={canEdit(role)}
-        initialFiles={files}
-        aiTestingEnabled={isAITestingEnabled()}
-        commits={commits.map((commit) => ({
-          id: commit.id,
-          sequence: commit.sequence,
-          message: commit.message,
-          parentId: commit.parentId,
-          promptVersionId: commit.promptVersionId,
-          model: commit.model,
-          elapsedMs: commit.elapsedMs,
-          inputTokens: commit.inputTokens,
-          outputTokens: commit.outputTokens,
-          incomplete: commit.incomplete,
-          createdAt: commit.createdAt.toISOString(),
-          authorName: commit.author?.name ?? null,
-          stats: commitStats(commit.files),
-          files: commit.files,
-        }))}
         versions={prompt.versions.map((version) => ({
           id: version.id,
           title: version.title,
