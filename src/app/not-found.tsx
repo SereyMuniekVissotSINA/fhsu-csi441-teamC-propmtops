@@ -8,7 +8,7 @@ export default function NotFound() {
         This page isn’t in the workspace.
       </h1>
       <p className="text-zinc-400">
-        Head home or open the demo to keep exploring.
+        Head home or open your dashboard to keep going.
       </p>
       <div className="flex gap-4">
         <Link className="rounded-lg border border-zinc-700 px-5 py-3" href="/">
@@ -16,9 +16,9 @@ export default function NotFound() {
         </Link>
         <Link
           className="rounded-lg bg-emerald-500 px-5 py-3 text-black"
-          href="/demo"
+          href="/dashboard"
         >
-          Open demo
+          Open dashboard
         </Link>
       </div>
     </main>

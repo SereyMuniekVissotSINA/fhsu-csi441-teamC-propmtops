@@ -29,6 +29,8 @@ model User {
   prompts        Prompt[]
   memberships    Membership[]
   promptVersions PromptVersion[]
+  codeCommits    CodeCommit[]
+  apiKeys        ApiKey[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -121,21 +123,28 @@ model Membership {
 }
 
 model ApiKey {
-  id          String @id @default(cuid())
+  id          String  @id @default(cuid())
   workspaceId String
   name        String
   // Only the sha256 of the key is stored; the plaintext is shown once at
   // creation and never again. `prefix` is the displayable head, e.g. "pops_a1b2".
-  hashedKey   String @unique
+  hashedKey   String  @unique
   prefix      String
+  // Who minted the key. A request authenticated with it is attributed to this
+  // user, so a prompt created from the CLI still has an author. Nullable
+  // because keys minted before this column existed have no creator on record;
+  // such a key can read but cannot create a prompt.
+  createdById String?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
   lastUsedAt DateTime?
   revokedAt  DateTime?
   createdAt  DateTime  @default(now())
 
   @@index([workspaceId])
+  @@index([createdById])
 }
 
 model Prompt {
@@ -146,9 +155,11 @@ model Prompt {
   // query. Rewritten every time a version is appended.
   title       String
 
-  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  author    User            @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  versions  PromptVersion[]
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  author      User            @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  versions    PromptVersion[]
+  codeCommits CodeCommit[]
+  files       PromptFile[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -168,11 +179,129 @@ model PromptVersion {
   note     String  @default("")
   authorId String?
 
-  prompt Prompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
-  author User?  @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  prompt      Prompt       @relation(fields: [promptId], references: [id], onDelete: Cascade)
+  author      User?        @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  codeCommits CodeCommit[]
 
   createdAt DateTime @default(now())
 
   @@index([promptId, createdAt])
   @@index([authorId])
+}
+
+// ---------------------------------------------------------------------------
+// Generated code
+//
+// A prompt that writes code has two histories worth keeping: the prompt text
+// (PromptVersion, above) and the code each run produced. A CodeCommit is the
+// second one — one generation run, parsed into files, pointing back at the
+// prompt version that produced it and at the commit before it.
+//
+// Same rule as prompts: append-only. A re-run never edits an old commit, which
+// is what makes "what did this prompt used to generate?" answerable.
+// ---------------------------------------------------------------------------
+
+enum CodeFileChange {
+  ADDED
+  MODIFIED
+  UNCHANGED
+  REMOVED
+}
+
+model CodeCommit {
+  id              String  @id @default(cuid())
+  promptId        String
+  // The prompt revision that produced this code. Nullable and SetNull: losing
+  // a version must not delete the record of what it generated.
+  promptVersionId String?
+  // The commit this one was generated on top of. Null for the first commit.
+  parentId        String?
+  authorId        String?
+  // Per-prompt counter, so the UI can say "c3" without counting rows.
+  sequence        Int
+  // Commit message. Written by the author, or derived from the diff.
+  message         String  @default("")
+
+  // Exactly what was sent and what came back, kept verbatim: the commit is
+  // only reproducible if the input that produced it is stored with it.
+  input        String
+  output       String
+  model        String
+  elapsedMs    Int
+  inputTokens  Int?
+  outputTokens Int?
+  // True when the provider stopped at the output limit, so a short file list
+  // is not mistaken for the model's complete answer.
+  incomplete   Boolean @default(false)
+
+  prompt        Prompt         @relation(fields: [promptId], references: [id], onDelete: Cascade)
+  promptVersion PromptVersion? @relation(fields: [promptVersionId], references: [id], onDelete: SetNull)
+  parent        CodeCommit?    @relation("CodeCommitHistory", fields: [parentId], references: [id], onDelete: SetNull)
+  children      CodeCommit[]   @relation("CodeCommitHistory")
+  author        User?          @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  files         CodeFile[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([promptId, sequence])
+  @@index([promptId, createdAt])
+  @@index([promptVersionId])
+  @@index([parentId])
+  @@index([authorId])
+}
+
+// One file at one commit. REMOVED rows carry empty contents and exist so a
+// commit describes the whole generated tree, not only its additions.
+model CodeFile {
+  id       String         @id @default(cuid())
+  commitId String
+  path     String
+  content  String
+  // Short sha256 of the contents, for spotting an identical file across commits.
+  hash     String
+  language String         @default("")
+  change   CodeFileChange @default(ADDED)
+  added    Int            @default(0)
+  removed  Int            @default(0)
+
+  commit CodeCommit @relation(fields: [commitId], references: [id], onDelete: Cascade)
+
+  @@unique([commitId, path])
+}
+
+// Original uploads and AI revisions are immutable snapshots. Bytes live in
+// PostgreSQL so they survive restarts and never enter the public asset folder.
+model PromptFile {
+  id           String @id @default(cuid())
+  promptId     String
+  name         String
+  kind         String
+  versionCount Int    @default(1)
+  prompt       Prompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+  versions     PromptFileVersion[]
+  createdAt    DateTime @default(now())
+
+  @@index([promptId, createdAt])
+}
+
+model PromptFileVersion {
+  id              String @id @default(cuid())
+  fileId          String
+  version         Int
+  content         Bytes
+  text            String
+  mimeType        String
+  size            Int
+  sourceVersionId String?
+  instruction     String @default("")
+  summary         String @default("")
+  model           String?
+  authorId        String?
+  createdAt       DateTime @default(now())
+  file            PromptFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  source          PromptFileVersion? @relation("FileRevisionSource", fields: [sourceVersionId], references: [id], onDelete: SetNull)
+  revisions       PromptFileVersion[] @relation("FileRevisionSource")
+
+  @@unique([fileId, version])
+  @@index([sourceVersionId])
 }

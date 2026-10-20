@@ -1,13 +1,13 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import type { DemoPrompt } from "@/lib/demo-prompts";
+import type { PromptRecord } from "@/lib/prompts-core";
 import { buildPromptGraph } from "@/lib/prompt-graph";
 
 const colors = { prompt: "#34d399", tag: "#c4b5fd", variable: "#7dd3fc", version: "#fbbf24" };
 const button = "rounded-md border border-zinc-700 px-3 py-2 text-xs hover:bg-zinc-800 focus-visible:outline-2 focus-visible:outline-emerald-400";
 
-export function PromptGraph({ prompts, onSelect }: { prompts: DemoPrompt[]; onSelect: (promptId: string, versionId?: string) => void }) {
+export function PromptGraph({ prompts, onSelect }: { prompts: PromptRecord[]; onSelect: (promptId: string, versionId?: string) => void }) {
   const [options, setOptions] = useState({ tags: true, variables: true, versions: false });
   const [focus, setFocus] = useState("");
   const [local, setLocal] = useState(false);

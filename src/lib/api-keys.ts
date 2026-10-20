@@ -2,10 +2,8 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 // Workspace API keys.
 //
-// The demo stores keys in plain text (`demo_personal_preview_only`), which is
-// fine for something that never leaves the browser. A real key is a credential,
-// so only its sha256 is persisted: the plaintext is returned once at creation
-// and is unrecoverable afterwards.
+// A key is a credential, so only its sha256 is persisted: the plaintext is
+// returned once at creation and is unrecoverable afterwards.
 
 export const KEY_PREFIX = "pops_";
 

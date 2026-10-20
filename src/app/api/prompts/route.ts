@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { failure, invalid, readJson } from "@/lib/api";
-import { requireMember, requireSession } from "@/lib/authz";
+import { requireCaller, requireCallerWorkspace, requireAuthorId } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
 import { createPromptSchema } from "@/lib/validations";
 
@@ -9,17 +9,22 @@ import { createPromptSchema } from "@/lib/validations";
 // to, and nothing else.
 export async function GET(request: Request) {
   try {
-    const session = await requireSession();
+    const caller = await requireCaller(request);
     const workspaceId = new URL(request.url).searchParams.get("workspaceId");
 
-    // Scoping to one workspace still goes through requireMember, so a guessed
-    // id cannot be used to read someone else's prompts.
-    if (workspaceId) await requireMember(workspaceId);
+    // Scoping to one workspace still goes through the caller check, so a
+    // guessed id cannot be used to read someone else's prompts.
+    if (workspaceId) await requireCallerWorkspace(request, workspaceId);
+
+    // A key sees exactly its own workspace; a session sees every workspace it
+    // belongs to.
+    const scope =
+      caller.kind === "key"
+        ? { workspaceId: caller.workspaceId }
+        : { workspace: { members: { some: { userId: caller.userId } } } };
 
     const prompts = await prisma.prompt.findMany({
-      where: workspaceId
-        ? { workspaceId }
-        : { workspace: { members: { some: { userId: session.user.id } } } },
+      where: workspaceId ? { workspaceId } : scope,
       orderBy: { updatedAt: "desc" },
       take: 50,
       include: {
@@ -43,14 +48,15 @@ export async function POST(request: Request) {
     if (!parsed.success) return invalid(parsed.error);
 
     const { workspaceId, title, body, tags } = parsed.data;
-    const { session } = await requireMember(workspaceId, "EDITOR");
+    const { caller } = await requireCallerWorkspace(request, workspaceId, "EDITOR");
+    const authorId = requireAuthorId(caller);
 
     // A prompt and its first version are created together: a prompt with no
     // versions would have nothing to render.
     const prompt = await prisma.prompt.create({
       data: {
         workspaceId,
-        authorId: session.user.id,
+        authorId,
         title,
         versions: {
           create: {
@@ -58,7 +64,7 @@ export async function POST(request: Request) {
             body,
             tags,
             note: "Initial version",
-            authorId: session.user.id,
+            authorId,
           },
         },
       },

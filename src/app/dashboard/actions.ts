@@ -135,6 +135,50 @@ export async function savePromptAction(
   return {};
 }
 
+/**
+ * Delete a prompt outright.
+ *
+ * This is the one destructive operation in the product, and it is deliberately
+ * not an append: a prompt's versions and the code commits generated from it all
+ * cascade with it (see `onDelete` in schema.prisma). Append-only governs edits
+ * — restoring an old version writes a new one — but a prompt the workspace no
+ * longer wants should not have to live forever to preserve that.
+ *
+ * EDITOR is the bar, matching `DELETE /api/prompts/[id]`, so a viewer cannot
+ * reach it even by posting the form directly.
+ */
+export async function deletePromptAction(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = String(formData.get("id") ?? "");
+
+  let slug: string;
+  try {
+    // Session first: looking the prompt up before authenticating would answer
+    // "does this id exist?" for anyone, since a missing row returns 404 where a
+    // real one returns 401.
+    await requireSession();
+
+    const prompt = await prisma.prompt.findUnique({
+      where: { id },
+      select: { workspaceId: true, workspace: { select: { slug: true } } },
+    });
+    if (!prompt) throw new AuthzError(404, "Prompt not found.");
+
+    await requireMember(prompt.workspaceId, "EDITOR");
+    await prisma.prompt.delete({ where: { id } });
+    slug = prompt.workspace.slug;
+  } catch (error) {
+    return { error: messageOf(error) };
+  }
+
+  // Outside the try, as above: redirect signals itself by throwing.
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/explorer");
+  redirect(`/dashboard?workspace=${slug}`);
+}
+
 async function uniqueSlug(name: string): Promise<string> {
   const base =
     name

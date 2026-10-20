@@ -4,7 +4,7 @@ import { z } from "zod";
 //
 // In production a misconfigured deploy must fail loudly and immediately. In
 // development it must NOT: the app is expected to run before any secrets exist,
-// so `/` and `/demo` keep working and the pages that need configuration render
+// so `/` keeps working and the pages that need configuration render
 // a "not configured" panel instead of a stack trace. Throwing here at module
 // evaluation would take down every route that transitively imports `@/auth`.
 const envSchema = z.object({
@@ -43,7 +43,7 @@ if (!result.success) {
 
   console.warn(
     `\n⚠️  Environment not configured: ${missing}\n` +
-      `   Copy .env.example to .env and fill it in. The demo at /demo still works.\n`,
+      `   Copy .env.example to .env and fill it in.\n`,
   );
 }
 

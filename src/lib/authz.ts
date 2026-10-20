@@ -13,14 +13,15 @@ export { atLeast, canEdit, wouldOrphanWorkspace };
 // The one place workspace role rules live. Routes and pages call these instead
 // of re-deriving "is this person allowed to..." each time.
 //
-// These mirror the rules the browser demo already enforces in
-// `src/lib/demo-accounts.ts` — most importantly the last-owner guard, which is
-// the rule that is easy to get wrong.
+// The rules themselves live in `src/lib/roles.ts`, kept import-free so they
+// stay unit-testable — most importantly the last-owner guard, which is the rule
+// that is easy to get wrong.
 
 /** Thrown by the `require*` helpers so route handlers can map it to a status. */
 export class AuthzError extends Error {
   constructor(
-    readonly status: 401 | 403 | 404,
+    // 409 is for append-only writes that lost a race, which the caller can retry.
+    readonly status: 401 | 403 | 404 | 409,
     message: string,
   ) {
     super(message);
@@ -42,6 +43,33 @@ export async function requireSessionPage(returnTo?: string): Promise<Session> {
     redirect(returnTo ? `/login?next=${encodeURIComponent(returnTo)}` : "/login");
   }
   return session;
+}
+
+/**
+ * Assert the signed-in user can reach `promptId` with at least `minimum`, and
+ * hand back the workspace it lives in.
+ *
+ * A prompt in a workspace the user does not belong to is reported as missing,
+ * for the same reason `requireMember` does: a 403 would confirm it exists. An
+ * unauthenticated caller gets 401 either way and learns nothing.
+ */
+export async function requirePromptMember(
+  promptId: string,
+  minimum: WorkspaceRole = "VIEWER",
+): Promise<{ session: Session; role: WorkspaceRole; workspaceId: string }> {
+  // Session first, deliberately: looking the prompt up before authenticating
+  // would answer "does this id exist?" for anyone, since a missing prompt
+  // returns 404 where a real one returns 401.
+  await requireSession();
+
+  const prompt = await prisma.prompt.findUnique({
+    where: { id: promptId },
+    select: { workspaceId: true },
+  });
+  if (!prompt) throw new AuthzError(404, "Prompt not found.");
+
+  const member = await requireMember(prompt.workspaceId, minimum);
+  return { ...member, workspaceId: prompt.workspaceId };
 }
 
 /**
