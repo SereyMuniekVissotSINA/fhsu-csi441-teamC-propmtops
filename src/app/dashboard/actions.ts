@@ -14,7 +14,7 @@ import {
   updatePromptSchema,
 } from "@/lib/validations";
 
-export type FormState = { error?: string };
+export type FormState = { error?: string; success?: boolean };
 
 export async function signOutAction() {
   await signOut({ redirectTo: "/" });
@@ -137,7 +137,7 @@ export async function savePromptAction(
 
   revalidatePath(`/dashboard/prompts/${id}`);
   revalidatePath("/dashboard");
-  return {};
+  return { success: true };
 }
 
 async function uniqueSlug(name: string): Promise<string> {

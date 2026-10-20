@@ -35,7 +35,7 @@ export default async function PromptPage({
         },
       },
       versions: {
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: { author: { select: { name: true } } },
       },
     },
@@ -56,7 +56,11 @@ export default async function PromptPage({
         </Link>
       </nav>
 
-      <h1 className="mb-8 text-2xl font-semibold">{prompt.title}</h1>
+      <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">{prompt.title}</h1>
+        <Link className="rounded-lg border border-emerald-700 px-4 py-2 text-sm text-emerald-400 hover:bg-emerald-950/40"
+          href={`/dashboard/prompts/${id}/analytics`}>Token usage &amp; savings</Link>
+      </div>
 
       <PromptEditor
         id={prompt.id}

@@ -175,6 +175,31 @@ deployment/hosting is left as an exercise for whoever ships this.
 
 ## File uploads and AI revisions
 
+### Prompt history and comparison
+
+In the authenticated prompt editor, **Load vN** restores that saved prompt's
+title, body, and tags without overwriting history. Loading another version
+asks before replacing unsaved edits. You can load the latest version too.
+After **Save as new version** succeeds, the body and commit note clear for a
+new entry; title and tags remain. Failed saves keep the draft intact.
+
+Use **Compare with latest** (or **Compare with previous** on the latest entry)
+to compare any two saved prompt versions. The comparison shows title/tag
+changes and red removed / green added content lines. For very large inputs,
+it shows complete old/new content instead of computing detailed line matches.
+This compares prompt snapshots, not attached file versions or unsaved drafts.
+
+Owners and editors can click **Analyze changes with AI** when server AI testing
+is enabled. Both saved snapshots are sent to the configured provider only on
+that click; usage limits and charges apply. AI analysis is an interpretation,
+does not execute either prompt, is not saved, and does not create a version.
+Analysis is limited to 32,000 serialized snapshot characters and 4,096 output
+tokens, with incomplete output clearly marked. Viewers can compare locally
+but cannot request AI analysis. Run `bun run test:history` for the regression
+tests; provider calls are mocked.
+
+### Attached files
+
 This feature is available in the authenticated `/dashboard`, not the
 browser-only demo. Apply the new tables before opening the dashboard:
 
@@ -193,6 +218,21 @@ be selected as the source for another revision. History records that source,
 the instruction, model, and summary. Viewers may preview and download files
 but cannot upload or run revisions.
 
+For files with two or more versions, click **Compare with vN** (or **Compare
+with latest/previous**) beside a file version. A comparison opens in the main
+panel; use its selectors to compare any two versions of that same file. Removed
+lines are red and added lines are green. **View both file contents** shows
+syntax-colored previews and download links. This is separate from prompt History.
+PDF/Word comparisons cover extracted text; Excel comparisons cover stored cell
+values displayed as readable JSON, not formulas, layouts, images, or formatting.
+
+Editors/owners can optionally click **Analyze file changes with AI**. Only then
+are both saved file contents sent to the configured provider. The action checks
+workspace access and that both versions belong to the same file and prompt.
+Analysis is limited to 64,000 serialized snapshot characters and 4,096 output
+tokens; partial output is marked. Analysis never executes code, modifies files,
+or creates a new version. Viewers can use the comparison without AI.
+
 Supported files and limits:
 
 - UTF-8 code/text files, text-based `.pdf`, `.docx`, and `.xlsx`. Legacy
@@ -209,7 +249,7 @@ Supported files and limits:
 
 Files and revisions are stored in PostgreSQL and scoped to the prompt's
 workspace. Deleting the prompt or workspace also deletes its attached files.
-Uploads are not sent to the AI until a run is requested. Do not upload secrets
+Uploads are not sent to the AI until a revision or AI analysis is requested. Do not upload secrets
 or content you are not allowed to share with the configured provider.
 File runs allow up to 16,384 output tokens, so they may cost more than text-only
 tests. Invalid, truncated, or failed responses do not create a revision.
@@ -224,6 +264,110 @@ Run `bun run test:files` for document round trips, original-byte preservation,
 upload validation, and mocked AI success/failure tests. These tests do not call
 a paid provider.
 
+### Token usage and observed savings (report UC-7 / UC-8)
+
+Open an authenticated prompt and click **Token usage & savings**. Every workspace
+member, including viewers, can review usage for that workspace. This implements
+the report's externally submitted usage/analytics flow (REQ-9, REQ-10, REQ-19,
+REQ-26), not automatic prompt rewriting or guaranteed token savings.
+
+Before starting a checkout with this feature, apply the additive migration and
+regenerate the client; never reset an existing database:
+
+```bash
+bunx --bun prisma migrate deploy
+bunx --bun prisma generate
+```
+
+An owner creates a workspace API key in the dashboard. An instrumented external
+application executes a saved prompt, collects the provider's actual token usage
+and its measured response latency, estimates cost using its applicable pricing,
+and sends a server-to-server request:
+
+```http
+POST /api/usage
+Authorization: Bearer <workspace-api-key>
+Content-Type: application/json
+```
+
+```json
+{
+  "requestId": "unique-id-for-this-execution",
+  "promptVersionId": "the-exact-saved-version-used",
+  "inputTokens": 100,
+  "outputTokens": 50,
+  "tokenUnit": "tokens",
+  "latency": { "value": 1.25, "unit": "s" },
+  "estimatedCost": { "amount": "0.00015000", "currency": "USD" },
+  "model": "provider/model",
+  "workload": "support-fixtures-v1-temp0",
+  "measuredAt": "2026-10-20T12:00:00.000Z"
+}
+```
+
+These are example measurements, not model prices or real production results.
+The analytics page's **How to record usage** section provides the saved version
+IDs. Send actual request counts from the provider, not character-count estimates.
+The `workload` label should identify the same input dataset and generation
+settings when comparing versions. Do not include secrets or prompt/file text.
+
+- New measurements return `201` with `usageId`, `promptVersionId`, `acceptedAt`,
+  and `duplicate: false`. Repeating the same API-key/request-ID pair with
+  equivalent normalized data returns `200`, the same receipt, and
+  `duplicate: true`. Changed data for that identity returns `409`; use a new ID
+  only for a genuinely new execution.
+- The key determines workspace access. A caller cannot supply a workspace ID;
+  foreign prompt versions are rejected. Revoked keys cannot ingest more data.
+  Historical usage remains readable after revocation.
+- Both token counts are required nonnegative integers, at most 2,147,483,647
+  each. Total tokens = input + output. Include provider-reported billable
+  reasoning/output tokens rather than counting visible response text alone.
+- Latency accepts `ms` or `s` and must convert to exact whole milliseconds,
+  at most 2,147,483,647. Explicit zeros are accepted; missing data is rejected.
+- Estimated cost accepts an ordinary decimal string (recommended) or number,
+  at most 12 integer and 8 fractional digits. No exponent notation, silent
+  rounding, currency conversion, or assumed model pricing. Supported currencies:
+  USD, KHR, EUR, GBP, CAD, AUD, JPY, CNY, INR, SGD.
+- Timestamps require a UTC/offset ISO timestamp, with seconds or exactly three
+  fractional digits. Records are filtered by **measuredAt**, not arrival time.
+  Bodies are limited to 16 KB. Invalid input returns `400`, invalid/revoked keys
+  `401`, foreign/missing versions `404`, and oversized payloads `413`.
+
+The UI filters by UTC interval, version, model, workload, and currency; its
+read-only endpoint is `GET /api/prompts/:id/usage?start=<ISO>&end=<ISO>` with
+optional `versionId`, `model`, `workload`, `currency` parameters and a member
+session. Start is inclusive and end exclusive. Results aggregate in PostgreSQL,
+separately by version/model/workload/currency, and include request counts,
+input/output/total tokens, mean tokens, mean latency in milliseconds, exact
+estimated-cost totals, and mean estimated cost. Narrow filters if the result
+would exceed 500 groups. Failures are not displayed as zero usage.
+
+Choose baseline/candidate groups from different prompt versions with matching
+model, workload, and currency. Observed reduction is
+`(baseline mean - candidate mean) / baseline mean × 100`, calculated per request
+so unequal request counts do not masquerade as savings. A zero baseline has no
+percentage; increases are labeled higher usage. Small samples and differing
+inputs/settings can bias comparisons. Review output quality separately.
+
+The current editor's **Run test**, file revisions, and AI change analyses are
+**not automatically recorded**: those can run an unsaved draft and must not be
+misattributed to the latest saved prompt. No historical usage is fabricated or
+backfilled. This analytics workflow makes no LLM calls.
+
+Verification:
+
+```bash
+bun run test:usage
+```
+
+For opt-in PostgreSQL integration tests, set `USAGE_DB_TESTS=1` and run
+`bun run test:usage:db`. Optionally provide `USAGE_TEST_DATABASE_URL`; otherwise
+the configured direct/database URL is used. The test creates a randomly named
+`promptops_usage_test_*` schema, migrates and populates **only that schema**, checks
+retry races, conflicts, authorization, revocation, time boundaries, and exact
+aggregate fixtures, then removes that temporary schema. It needs create-schema
+permission. It never resets or seeds the application's tables or calls an LLM.
+
 ## Scripts
 
 | Command | What it does |
@@ -234,6 +378,8 @@ a paid provider.
 | `bun run lint` | ESLint |
 | `bun run typecheck` | `tsc --noEmit` |
 | `bun run test:files` | File upload/revision and mocked provider tests |
+| `bun run test:usage` | Usage validation, normalization, and savings calculations |
+| `bun run test:usage:db` | Opt-in isolated PostgreSQL integration tests |
 | `bun run db:migrate` | Create + apply a migration |
 | `bun run db:push` | Push schema without a migration |
 | `bun run db:seed` | Run `prisma/seed.ts` |

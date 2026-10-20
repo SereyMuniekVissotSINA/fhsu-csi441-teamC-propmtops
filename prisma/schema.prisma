@@ -130,6 +130,7 @@ model ApiKey {
   prefix      String
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  usageRecords UsageRecord[]
 
   lastUsedAt DateTime?
   revokedAt  DateTime?
@@ -171,11 +172,36 @@ model PromptVersion {
 
   prompt Prompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
   author User?  @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  usageRecords UsageRecord[]
 
   createdAt DateTime @default(now())
 
   @@index([promptId, createdAt])
   @@index([authorId])
+}
+
+// Measurements submitted by an authenticated integration, not token estimates
+// inferred from prompt length. Request identity prevents retry double-counting.
+model UsageRecord {
+  id              String   @id @default(cuid())
+  apiKeyId        String
+  requestId       String
+  promptVersionId String
+  inputTokens     Int
+  outputTokens    Int
+  latencyMs       Int
+  estimatedCost   Decimal  @db.Decimal(20, 8)
+  currency        String   @db.VarChar(3)
+  model           String
+  // A caller-defined, repeatable workload (include dataset/settings identity).
+  workload        String
+  measuredAt      DateTime @db.Timestamptz(3)
+  receivedAt      DateTime @default(now()) @db.Timestamptz(3)
+  apiKey          ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  promptVersion   PromptVersion @relation(fields: [promptVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([apiKeyId, requestId])
+  @@index([promptVersionId, measuredAt])
 }
 
 // Original uploads and AI revisions are immutable snapshots. Bytes live in

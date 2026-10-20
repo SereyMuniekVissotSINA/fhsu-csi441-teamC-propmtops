@@ -2,13 +2,16 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { FileUploadField } from "@/components/file-upload-field";
+import { FileCodePreview } from "@/components/file-code-preview";
 import type { PromptFileInfo } from "@/lib/file-policy";
+import type { FileComparisonPair } from "@/lib/file-comparison";
 import { field, panel, primary } from "@/lib/ui";
 
-export function PromptFiles({ promptId, files, selected, onSelect, onFiles, onUploadingChange, editable, busy, children }: {
+export function PromptFiles({ promptId, files, selected, onSelect, onFiles, onUploadingChange, onCompare, editable, busy, children }: {
   promptId: string; files: PromptFileInfo[]; selected: string;
   onSelect: (id: string) => void; onFiles: (files: PromptFileInfo[]) => void;
   onUploadingChange: (uploading: boolean) => void;
+  onCompare: (pair: FileComparisonPair) => void;
   editable: boolean; busy: boolean;
   children?: ReactNode;
 }) {
@@ -17,6 +20,8 @@ export function PromptFiles({ promptId, files, selected, onSelect, onFiles, onUp
   const [preview, setPreview] = useState<{ id: string; text: string; instruction: string } | null>(null);
   const [previewError, setPreviewError] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const selectedFile = files.find(file => file.versions.some(version => version.id === selected));
   useEffect(() => {
     if (!selected) return;
     const controller = new AbortController();
@@ -86,10 +91,10 @@ export function PromptFiles({ promptId, files, selected, onSelect, onFiles, onUp
     {selected ? <div aria-live="polite">
       {previewLoading ? <p className="text-sm text-zinc-400">Loading file preview…</p> : null}
       {previewError ? <p role="alert" className="text-sm text-red-400">{previewError}</p> : null}
-      {preview?.id === selected ? <details>
+      {preview?.id === selected ? <details open={previewOpen} onToggle={event => setPreviewOpen(event.currentTarget.open)}>
         <summary className="cursor-pointer text-sm text-emerald-400">Preview file content</summary>
         {preview.instruction ? <p className="my-2 text-xs text-zinc-400">Revision instruction: {preview.instruction}</p> : null}
-        <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-black/40 p-3 text-xs">{preview.text}</pre>
+        {previewOpen ? <FileCodePreview key={preview.id} text={preview.text} name={selectedFile?.name ?? "file.txt"} kind={selectedFile?.kind ?? "text"} /> : null}
       </details> : null}
     </div> : null}
     {children}
@@ -102,6 +107,10 @@ export function PromptFiles({ promptId, files, selected, onSelect, onFiles, onUp
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-emerald-400">v{version.version}{version.version === 1 ? " · Original" : source ? ` · From v${source.version}` : " · AI revision"}</span>
               <a className="underline underline-offset-4" href={`/api/prompts/${promptId}/files/${version.id}`}>Download v{version.version}</a>
+              {file.versions.length > 1 ? <button type="button" className="text-xs text-emerald-400 underline" onClick={() => {
+                const other = source ?? file.versions.find(item => item.id !== version.id)!;
+                onCompare({ fileId: file.id, firstId: other.id, secondId: version.id });
+              }}>{source ? `Compare with v${source.version}` : version.id === file.versions[0].id ? "Compare with previous" : "Compare with latest"}</button> : null}
             </div>
             <p className="mt-1 text-xs text-zinc-400">{version.summary}</p>
             <p className="mt-1 text-xs text-zinc-500">{version.createdAt.slice(0, 16).replace("T", " ")} UTC · {(version.size / 1024).toFixed(1)} KB{version.model ? ` · ${version.model}` : ""}</p>
