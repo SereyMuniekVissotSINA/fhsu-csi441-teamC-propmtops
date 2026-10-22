@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { readFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { parseArgs } from "node:util";
 
 import { composePrompt, variableNames } from "@/lib/prompts-core";
@@ -11,11 +12,12 @@ import {
   configPath,
   loadConfig,
   maskKey,
-  saveConfig,
   stripTrailingSlash,
+  updateConfig,
 } from "./config";
 import { changeCount, paint, paintChange, renderDiff, table, truncate, when } from "./format";
-import { matchPrompt, parseRange, parseRef, parseVariables } from "./resolve";
+import { matchKey, matchPrompt, parseRange, parseRef, parseVariables } from "./resolve";
+import { askPassword, passwordSignIn } from "./session";
 
 // `pops` — the command-line client for Prompt Ops.
 //
@@ -23,6 +25,11 @@ import { matchPrompt, parseRange, parseRef, parseVariables } from "./resolve";
 // there is one implementation of the rules and the CLI cannot drift from the
 // product. Authentication is a workspace API key, which is why the key is
 // scoped to one workspace and acts as an editor inside it.
+//
+// Key administration is the exception. A key can never mint another key, so the
+// `keys` commands sign in as a person instead and present a session cookie —
+// the same credential a browser holds, obtained the same way. Everything else
+// goes out under the key.
 
 const HELP = `pops — Prompt Ops from the terminal
 
@@ -43,12 +50,22 @@ Workflow
   commit <prompt> [c2]          One commit: files and metadata  (--diff, --file path)
 
 Authentication
-  auth login --key pops_…       Store a key (and --url for a non-default host)
-  auth status                   Show where the CLI points and which key it holds
-  auth logout                   Forget the stored key
+  auth login --email you@…      Sign in with your password, for the keys commands
+  auth login --key pops_…       Store a key you already have
+  auth status                   Show where the CLI points and what it holds
+  auth logout                   Forget the stored key and session
+
+API keys (workspace owners, after \`auth login --email\`)
+  keys                          List the workspace's keys
+  keys create [--name laptop]   Mint a key and print it once  (--save stores it)
+  keys revoke <prefix|name>     Revoke a key, keeping it on the record
 
 Options
   --workspace <slug|id>   Which workspace to act in
+  --email <address>       Sign in as this user
+  --password <text>       Skip the password prompt (prefer POPS_PASSWORD)
+  --name <text>           Name for a new key
+  --save                  Store a freshly minted key as the one this CLI uses
   -v, --var name=value    Fill a {{variable}}; repeat for several
   -m, --message <text>    Commit message for \`generate\`
   --file <path>           Read a prompt body from a file, or pick a file in \`commit\`
@@ -62,7 +79,14 @@ A prompt can be named by id, by a 6+ character id prefix, or by part of its
 title. Generating and running reach a model, so they need the app in
 development mode with a provider configured.
 
-Create a key in the web app: workspace settings → API keys (owners only).`;
+First run, from nothing:
+
+  pops auth login --email owner@example.com
+  pops keys create --name "my laptop" --save
+  pops whoami
+
+The key is shown once, when it is created, and is unrecoverable afterwards —
+only its hash is stored. Mint a new one rather than hunting for an old one.`;
 
 type Options = {
   workspace?: string;
@@ -77,6 +101,10 @@ type Options = {
   body?: string;
   tags?: string;
   note?: string;
+  email?: string;
+  password?: string;
+  name?: string;
+  save: boolean;
 };
 
 async function main(argv: string[]): Promise<number> {
@@ -96,6 +124,10 @@ async function main(argv: string[]): Promise<number> {
       body: { type: "string" },
       tags: { type: "string" },
       note: { type: "string" },
+      email: { type: "string" },
+      password: { type: "string" },
+      name: { type: "string" },
+      save: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
     // `--diff` with no value, and unknown flags, should explain themselves
@@ -115,6 +147,8 @@ async function main(argv: string[]): Promise<number> {
   switch (command) {
     case "auth":
       return auth(rest, options);
+    case "keys":
+      return keys(rest, options);
     case "whoami":
       return whoami(client(), options);
     case "workspaces":
@@ -144,47 +178,258 @@ async function main(argv: string[]): Promise<number> {
 
 // --- authentication ---------------------------------------------------------
 
-function auth(args: string[], options: Options): number {
+async function auth(args: string[], options: Options): Promise<number> {
   const [action = "status"] = args;
 
-  if (action === "login") {
-    if (!options.key) {
-      throw new CliError(
-        "Pass the key: `pops auth login --key pops_…`\n" +
-          "Create one in the web app: workspace settings → API keys (owners only).",
-      );
-    }
-    if (!options.key.startsWith("pops_")) {
-      throw new CliError("That does not look like a Prompt Ops key; they start with `pops_`.");
-    }
-    const url = stripTrailingSlash(options.url ?? loadConfig().url ?? DEFAULT_URL);
-    const path = saveConfig({ url, key: options.key });
-    console.log(`Saved ${maskKey(options.key)} for ${url}`);
-    console.log(paint(`  ${path} (owner-readable only)`, "dim"));
-    console.log(paint("  Check it with `pops whoami`.", "dim"));
-    return 0;
-  }
+  if (action === "login") return login(options);
 
   if (action === "logout") {
-    console.log(clearConfig() ? "Key forgotten." : "No stored key to forget.");
+    console.log(clearConfig() ? "Key and session forgotten." : "Nothing stored to forget.");
     console.log(paint("  POPS_API_KEY in your environment, if set, still applies.", "dim"));
     return 0;
   }
 
   if (action === "status") {
     const config = loadConfig();
-    console.log(`url   ${config.url}`);
-    console.log(`key   ${config.key ? maskKey(config.key) : paint("none", "dim")}`);
-    console.log(paint(`file  ${configPath()}`, "dim"));
+    console.log(`url      ${config.url}`);
+    console.log(`key      ${config.key ? maskKey(config.key) : paint("none", "dim")}`);
+    console.log(
+      `session  ${
+        config.session
+          ? `signed in${config.email ? ` as ${config.email}` : ""}`
+          : paint("none — `pops auth login --email you@example.com` to manage keys", "dim")
+      }`,
+    );
+    console.log(paint(`file     ${configPath()}`, "dim"));
     // Say so when the environment is winning, otherwise the file above looks
     // like it is in charge when it is not.
     for (const name of ["POPS_URL", "POPS_API_KEY"] as const) {
-      if (process.env[name]) console.log(paint(`env   ${name} is set and takes precedence`, "yellow"));
+      if (process.env[name]) console.log(paint(`env      ${name} is set and takes precedence`, "yellow"));
     }
     return 0;
   }
 
   throw new CliError(`Unknown auth command "${action}". Try login, logout, or status.`);
+}
+
+/**
+ * Two ways in, because there are two credentials. `--key` stores one you
+ * already hold; `--email` signs in so the `keys` commands can issue the first
+ * one — a chicken-and-egg problem the web app used to be the only answer to.
+ */
+async function login(options: Options): Promise<number> {
+  const url = stripTrailingSlash(options.url ?? loadConfig().url ?? DEFAULT_URL);
+
+  if (options.email) {
+    const email = options.email.trim();
+    const given = options.password ?? process.env.POPS_PASSWORD?.trim();
+    const password = given || (await askPassword(`Password for ${email}: `));
+    if (!password) throw new CliError("No password given.");
+
+    const session = await passwordSignIn({ url, email, password });
+    const path = updateConfig({ url, session, email });
+    console.log(`Signed in as ${email} on ${url}`);
+    console.log(paint(`  ${path} (owner-readable only)`, "dim"));
+
+    // Naming the workspaces they own turns the next command into a copy-paste
+    // rather than a guess, and proves the cookie actually works.
+    const me = await createClient({ url, session }).sessionRequest<WhoAmI>("/api/me");
+    const owned = me.workspaces.filter((entry) => entry.role === "OWNER");
+    for (const entry of me.workspaces) {
+      console.log(`  ${entry.workspace.slug.padEnd(16)} ${entry.role.toLowerCase()}`);
+    }
+    console.log(
+      owned.length > 0
+        ? paint('\nMint a key with `pops keys create --name "my laptop" --save`.', "dim")
+        : paint("\nYou do not own a workspace, so you cannot mint keys.", "yellow"),
+    );
+    return 0;
+  }
+
+  if (options.key) {
+    if (!options.key.startsWith("pops_")) {
+      throw new CliError("That does not look like a Prompt Ops key; they start with `pops_`.");
+    }
+    const path = updateConfig({ url, key: options.key });
+    console.log(`Saved ${maskKey(options.key)} for ${url}`);
+    console.log(paint(`  ${path} (owner-readable only)`, "dim"));
+    console.log(paint("  Check it with `pops whoami`.", "dim"));
+    return 0;
+  }
+
+  throw new CliError(
+    "Sign in one of two ways:\n" +
+      "  pops auth login --email you@example.com   password prompt, lets you manage keys\n" +
+      "  pops auth login --key pops_…              a key you already have",
+  );
+}
+
+// --- API keys ---------------------------------------------------------------
+
+type KeyRecord = {
+  id: string;
+  name: string;
+  prefix: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+};
+
+async function keys(args: string[], options: Options): Promise<number> {
+  const [action = "list", ...rest] = args;
+  const client = createClient({ url: options.url });
+
+  try {
+    switch (action) {
+      case "list":
+        return await keysList(client, options);
+      case "create":
+      case "new":
+        return await keysCreate(client, options);
+      case "revoke":
+      case "delete":
+        return await keysRevoke(client, rest[0], options);
+      default:
+        throw new CliError(`Unknown keys command "${action}". Try list, create, or revoke.`);
+    }
+  } catch (error) {
+    // A cookie expires where a key does not, and "You must be signed in" on its
+    // own looks like a bug when you signed in last week.
+    if (error instanceof CliError && error.status === 401 && client.hasSession) {
+      throw new CliError(
+        "That session is no longer valid — sign in again:\n" +
+          "  pops auth login --email you@example.com",
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Which workspace to administer. Only owners can reach these routes at all, so
+ * a workspace the caller merely edits is not a candidate — offering it would
+ * only produce a 403 one call later.
+ */
+async function ownedWorkspace(client: Client, options: Options) {
+  const me = await client.sessionRequest<WhoAmI>("/api/me");
+  const owned = me.workspaces.filter((entry) => entry.role === "OWNER");
+
+  if (options.workspace) {
+    const chosen = me.workspaces.find(
+      (entry) =>
+        entry.workspace.slug === options.workspace || entry.workspace.id === options.workspace,
+    );
+    if (!chosen) throw new CliError(`No workspace "${options.workspace}" that you can reach.`);
+    if (chosen.role !== "OWNER") {
+      throw new CliError(
+        `You are ${chosen.role.toLowerCase()} in ${chosen.workspace.slug}; keys are owners only.`,
+      );
+    }
+    return chosen.workspace;
+  }
+
+  if (owned.length === 0) {
+    throw new CliError("You do not own a workspace, so there are no keys to manage.");
+  }
+  // Picking one of several silently would list or revoke keys in a workspace
+  // the user was not thinking about.
+  if (owned.length > 1) {
+    const slugs = owned.map((entry) => entry.workspace.slug).join(", ");
+    throw new CliError(`You own several workspaces. Pass --workspace <${slugs}>.`);
+  }
+  return owned[0].workspace;
+}
+
+async function keysList(client: Client, options: Options): Promise<number> {
+  const workspace = await ownedWorkspace(client, options);
+  const list = await client.sessionRequest<KeyRecord[]>(`/api/workspaces/${workspace.id}/keys`);
+  if (options.json) return print(list);
+  if (list.length === 0) {
+    return say(`No keys in ${workspace.slug}. Create one with \`pops keys create\`.`);
+  }
+
+  const stored = loadConfig().key;
+  console.log(
+    table([
+      ["KEY", "NAME", "CREATED", "LAST USED", "STATUS"],
+      ...list.map((record) => [
+        // Mark the one this CLI is holding, so revoking does not silently log
+        // the user out of their own terminal.
+        stored?.startsWith(record.prefix) ? paint(`${record.prefix}… *`, "cyan") : `${record.prefix}…`,
+        truncate(record.name, 24),
+        when(record.createdAt),
+        record.lastUsedAt ? when(record.lastUsedAt) : paint("never", "dim"),
+        record.revokedAt ? paint("revoked", "yellow") : paint("active", "green"),
+      ]),
+    ]),
+  );
+  if (list.some((record) => stored?.startsWith(record.prefix))) {
+    console.log(paint("\n* the key this CLI is using", "dim"));
+  }
+  return 0;
+}
+
+async function keysCreate(client: Client, options: Options): Promise<number> {
+  const workspace = await ownedWorkspace(client, options);
+  // A name is required by the API; defaulting to the machine means a key can be
+  // traced back to where it is installed without the user inventing a label.
+  const name = (options.name ?? `cli on ${hostname()}`).slice(0, 60);
+
+  const created = await client.sessionRequest<KeyRecord & { key: string }>(
+    `/api/workspaces/${workspace.id}/keys`,
+    { method: "POST", body: JSON.stringify({ name }) },
+  );
+  if (options.json) return print(created);
+
+  console.log(`Created ${paint(created.name, "bold")} in ${workspace.slug}`);
+  console.log();
+  console.log(`  ${paint(created.key, "cyan")}`);
+  console.log();
+  console.log(paint("This is the only time the key is shown — only its hash is stored.", "yellow"));
+
+  if (options.save) {
+    updateConfig({ url: client.url, key: created.key });
+    console.log(`Saved as this CLI's key. Check it with \`pops whoami\`.`);
+  } else {
+    console.log(paint("Store it with `pops auth login --key …`, or re-run with --save.", "dim"));
+  }
+  return 0;
+}
+
+async function keysRevoke(
+  client: Client,
+  needle: string | undefined,
+  options: Options,
+): Promise<number> {
+  if (!needle) throw new CliError("Which key? Pass its prefix, name, or id.");
+  const workspace = await ownedWorkspace(client, options);
+  const list = await client.sessionRequest<KeyRecord[]>(`/api/workspaces/${workspace.id}/keys`);
+
+  const match = matchKey(list, needle);
+  if (match.kind === "none") {
+    throw new CliError(`No key matches "${needle}" in ${workspace.slug}. Run \`pops keys\`.`);
+  }
+  if (match.kind === "many") {
+    const lines = match.candidates
+      .map((candidate) => `  ${candidate.prefix}…  ${candidate.name}`)
+      .join("\n");
+    throw new CliError(`"${needle}" matches several keys:\n${lines}`);
+  }
+
+  const key = match.value;
+  if (key.revokedAt) return say(`${key.prefix}… was already revoked ${when(key.revokedAt)}.`);
+
+  await client.sessionRequest(`/api/workspaces/${workspace.id}/keys?keyId=${key.id}`, {
+    method: "DELETE",
+  });
+  console.log(`Revoked ${paint(`${key.prefix}…`, "bold")} (${key.name}).`);
+  // Revoked rather than deleted server-side, so the listing still shows it.
+  console.log(paint("  It stays on the record, and stops working immediately.", "dim"));
+
+  if (loadConfig().key?.startsWith(key.prefix)) {
+    console.log(paint("That was this CLI's own key — mint another with `pops keys create --save`.", "yellow"));
+  }
+  return 0;
 }
 
 // --- reading ----------------------------------------------------------------

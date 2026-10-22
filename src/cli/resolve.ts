@@ -38,6 +38,38 @@ export function matchPrompt<T extends Named>(prompts: T[], needle: string): Matc
   return { kind: "none" };
 }
 
+/**
+ * Naming a key to revoke. A key's plaintext is unrecoverable, so the only
+ * handles a person has are the displayable `prefix` the dashboard and `pops
+ * keys` print, its name, and its id.
+ *
+ * `pops_a1b2c3` is accepted with or without the `pops_` on the front, because
+ * the listing shows it both ways depending on how wide the terminal is, and
+ * because typing a secret's prefix and having it rejected is maddening.
+ */
+export type NamedKey = { id: string; name: string; prefix: string; revokedAt: string | null };
+
+export function matchKey<T extends NamedKey>(keys: T[], needle: string): Match<T> {
+  const term = needle.trim();
+  if (!term) return { kind: "none" };
+
+  const exactId = keys.find((key) => key.id === term);
+  if (exactId) return { kind: "one", value: exactId };
+
+  const bare = term.replace(/^pops_/, "").toLowerCase();
+  const byPrefix = keys.filter((key) => key.prefix.replace(/^pops_/, "").toLowerCase() === bare);
+  if (byPrefix.length === 1) return { kind: "one", value: byPrefix[0] };
+  if (byPrefix.length > 1) return { kind: "many", candidates: byPrefix };
+
+  // Names are not unique, and revoking the wrong credential is not something
+  // to guess at, so two keys called "laptop" are reported as ambiguous.
+  const byName = keys.filter((key) => key.name.toLowerCase() === term.toLowerCase());
+  if (byName.length === 1) return { kind: "one", value: byName[0] };
+  if (byName.length > 1) return { kind: "many", candidates: byName };
+
+  return { kind: "none" };
+}
+
 /** `-v name=value`, repeated. A value may contain `=`; the first one splits. */
 export function parseVariables(pairs: string[]): Record<string, string> {
   const values: Record<string, string> = {};
