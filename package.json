@@ -10,6 +10,7 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "pops": "bun src/cli/index.ts",
+    "mcp": "bun src/mcp/index.ts",
     "smoke:test": "bun scripts/smoke-test.ts",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
@@ -29,6 +30,7 @@
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.3",
     "@hookform/resolvers": "^5.9.1",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "@tanstack/react-query": "^5.102.8",

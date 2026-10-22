@@ -160,7 +160,7 @@ model Prompt {
   author      User            @relation(fields: [authorId], references: [id], onDelete: Cascade)
   versions    PromptVersion[]
   codeCommits CodeCommit[]
-  files     PromptFile[]
+  files       PromptFile[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
