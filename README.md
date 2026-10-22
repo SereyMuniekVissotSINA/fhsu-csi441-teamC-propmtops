@@ -106,43 +106,39 @@ For local testing through a 9Router instance, set these in `.env`:
 
 ```env
 LLM_BASE_URL="http://localhost:20128/v1"
-LLM_MODEL="openrouter/stepfun/step-3.5-flash:free"
+LLM_MODEL="openrouter/nvidia/nemotron-3-super-120b-a12b:free"
 LLM_API_KEY="your-9router-api-key"
 ```
 
-Use the key 9Router generates for you, and keep your actual upstream
-OpenRouter key tucked away inside 9Router itself. Model IDs come straight
-from 9Router's `/v1/models` list. Restart `bun run dev`, sign in, open a
-prompt from `/dashboard`, fill in its variables, and click **Run test**. One
-thing to know: `LLM_BASE_URL` routes through
-Chat Completions with a 4,096-token output cap, and it only works for things
-your own machine can reach — a cloud-hosted deployment can't dial back into
-your laptop. Unset it if you want to go straight to OpenAI instead.
+Use the key 9Router issues you, and keep your actual upstream OpenRouter key
+tucked away inside 9Router itself — never in `.env`. `LLM_MODEL` has to be an
+id from 9Router's own `/v1/models` list; ask the running server what it has:
 
-Speaking of which: grab an API project/key from
-https://platform.openai.com/api-keys, make sure billing's set up for that
-project, then add `OPENAI_API_KEY` and `OPENAI_MODEL` (any model your project
-can access via the Responses API) to `.env` and restart the dev server. Keep
-that key server-side and far away from version control.
+```bash
+curl -s -H "Authorization: Bearer $LLM_API_KEY" "$LLM_BASE_URL/models" \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>JSON.parse(s).data.forEach(m=>console.log(m.id)))'
+```
 
-With PostgreSQL wired up and migrations applied, sign in as a workspace
-owner or editor, open a prompt in `/dashboard`, fill in its variables, and
-click **Run with OpenAI**. It sends your current draft — unsaved edits and
-all — and shows you the response, the model, how long it took, and the token
-usage. Text-only results are a scratchpad and are not saved. Selecting an
-attached file saves a separate revised file version (see below).
+Then restart `bun run dev`, sign in, open a prompt from `/dashboard`, fill in
+its variables, and click **Run test**. It sends your current draft — unsaved
+edits and all — and shows the response, the model, how long it took, and the
+token usage. Text-only results are a scratchpad and are not saved; selecting
+an attached file saves a separate revised file version (see below).
 
-AI testing is enabled in development. The authenticated editor can also run
-in production when `AI_TESTING_ENABLED=true`; the anonymous demo remains
-development-only. Text-only direct OpenAI requests are capped at 16,000 input
-characters, 1,024 output tokens, and 60
-seconds, with no automatic retries, so a bad prompt can't quietly burn
-through your budget (though the caps don't add up to a hard spending limit
-overall, so still keep an eye on your bill). Want to sanity-check the
-plumbing without spending a cent? Run
+All three `LLM_*` variables are needed together, and the server has to be
+something your own machine can reach — a cloud-hosted deployment cannot dial
+back into your laptop. The request goes through Chat Completions with a
+4,096-token output cap.
+
+AI testing is enabled in development, and in production only when
+`AI_TESTING_ENABLED=true`. Every request is capped at 16,000 input characters,
+1,024 output tokens, and 60 seconds, with no automatic retries, so a bad
+prompt can't quietly burn through your quota — though those caps are per
+request, not a spending limit, so keep an eye on usage. To sanity-check the
+plumbing without spending anything, run
 `node --import tsx --test src/lib/openai-run.test.ts` — it's all mocked.
 
-Not in here (yet): an MCP server and any kind of persistent token analytics.
+Not in here (yet): persistent token analytics.
 And deployment/hosting is left as an exercise for whoever ships this.
 
 ## Generating code — and keeping every version of it
