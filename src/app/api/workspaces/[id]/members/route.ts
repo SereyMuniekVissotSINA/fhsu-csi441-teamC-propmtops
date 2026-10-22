@@ -5,8 +5,8 @@ import { AuthzError, requireMember, wouldOrphanWorkspace } from "@/lib/authz";
 import { prisma } from "@/lib/prisma";
 import { memberSchema, updateMemberSchema } from "@/lib/validations";
 
-// Only owners manage membership. This needs a session, not a workspace API
-// key — that is what stops a key from promoting its own bearer.
+// Only owners manage membership — same rule the demo enforces in
+// `src/lib/demo-accounts.ts`.
 
 export async function POST(request: Request, { params }: RouteContext<"/api/workspaces/[id]/members">) {
   try {

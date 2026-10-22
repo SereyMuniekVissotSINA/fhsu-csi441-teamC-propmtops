@@ -1,12 +1,12 @@
 import Link from "next/link";
 
-import { page, panel, primary } from "@/lib/ui";
+import { action, page, panel, primary } from "@/lib/ui";
 
 /**
  * Shown instead of a Prisma stack trace when the database is not reachable.
  *
- * The landing page never touches Prisma, so it keeps rendering; every page that
- * does need the database lands here with the setup steps instead of throwing.
+ * During the dev phase the app has to stay usable with no database and no
+ * secrets — `/` and `/demo` never touch Prisma, and the pages that do land here.
  */
 export function BackendUnavailable({ what = "This page" }: { what?: string }) {
   return (
@@ -17,8 +17,8 @@ export function BackendUnavailable({ what = "This page" }: { what?: string }) {
         <h1 className="mt-3 text-2xl font-semibold">{what} needs a database</h1>
 
         <p className="mt-3 text-sm leading-relaxed text-zinc-400">
-          The app is running, but it cannot reach the database. Apply the
-          migrations and it will pick them up without a restart.
+          The app is running, but it cannot reach the database. Everything else
+          still works — the demo workspace runs entirely in your browser.
         </p>
 
         <pre className="mt-5 overflow-x-auto rounded-lg border border-zinc-800 bg-black/60 p-4 text-left font-mono text-xs text-zinc-300">
@@ -29,7 +29,10 @@ export function BackendUnavailable({ what = "This page" }: { what?: string }) {
         </pre>
 
         <div className="mt-6 flex justify-center gap-3">
-          <Link className={primary} href="/">
+          <Link className={primary} href="/demo">
+            Open the demo
+          </Link>
+          <Link className={action} href="/">
             Back to home
           </Link>
         </div>

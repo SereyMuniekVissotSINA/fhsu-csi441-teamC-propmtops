@@ -4,18 +4,18 @@ const features = [
   {
     title: "Auth & Workspaces",
     description:
-      "Sign in, switch team workspaces, and explore owner, editor, and viewer permissions.",
+      "Try demo sign-in, switch team workspaces, and explore owner, editor, and viewer permissions.",
     icon: "◉",
-    href: "/dashboard",
-    cta: "Open your workspace",
+    href: "/demo",
+    cta: "Try auth & workspaces",
   },
   {
     title: "Version Control",
     description:
       "Save immutable snapshots, compare changes side by side, and restore earlier versions with an audit trail.",
     icon: "⌘",
-    href: "/dashboard/explorer",
-    cta: "Browse the library",
+    href: "/demo?view=history",
+    cta: "Try version control",
   },
   {
     title: "Prompt CMS",
@@ -77,10 +77,10 @@ export default function Home() {
             </Link>
 
             <Link
-              href="/register"
+              href="/demo"
               className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-black transition hover:bg-emerald-400"
             >
-              Get started
+              Try Demo
             </Link>
           </div>
         </div>
@@ -101,10 +101,10 @@ export default function Home() {
         {/* Hero buttons */}
         <div className="mt-8 flex flex-col gap-3 sm:flex-row">
           <Link
-            href="/dashboard"
+            href="/demo"
             className="rounded-lg bg-emerald-500 px-6 py-3 text-sm font-semibold text-black transition hover:bg-emerald-400"
           >
-            Open Dashboard &gt;_
+            Open Demo &gt;_
           </Link>
 
           <Link
@@ -115,8 +115,7 @@ export default function Home() {
           </Link>
         </div>
         <p className="mt-4 text-xs text-zinc-500">
-          Sign in to your workspace. Prompts and their history are stored in
-          PostgreSQL.
+          No account needed. Demo prompts are saved in your browser.
         </p>
       </section>
 
@@ -129,9 +128,9 @@ export default function Home() {
           Built for the prompt lifecycle
         </h2>
         <p className="mb-8 text-sm leading-6 text-zinc-400">
-          Authentication, workspace roles, prompt storage, version comparison,
-          and variable previews all work today. Running a prompt against a model
-          is development-only for now, and token analytics are planned.
+          Demo identities, workspace roles, prompt storage, version comparison,
+          and variable previews are ready to explore. Live authentication, LLM
+          calls, and analytics are planned.
         </p>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {features.map((feature) => (

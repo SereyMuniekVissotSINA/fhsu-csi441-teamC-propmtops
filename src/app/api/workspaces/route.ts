@@ -1,24 +1,16 @@
 import { NextResponse } from "next/server";
 
 import { failure, invalid, readJson } from "@/lib/api";
-import { requireCaller } from "@/lib/api-auth";
-// Creating a workspace stays session-only: a key is scoped to the workspace it
-// was minted in and has no business minting more.
 import { requireSession } from "@/lib/authz";
 import { prisma } from "@/lib/prisma";
 import { createWorkspaceSchema } from "@/lib/validations";
 
-export async function GET(request: Request) {
+export async function GET() {
   try {
-    const caller = await requireCaller(request);
+    const session = await requireSession();
 
     const workspaces = await prisma.workspace.findMany({
-      // A key is scoped to the workspace it was minted in; a session sees
-      // every workspace its user belongs to.
-      where:
-        caller.kind === "key"
-          ? { id: caller.workspaceId }
-          : { members: { some: { userId: caller.userId } } },
+      where: { members: { some: { userId: session.user.id } } },
       orderBy: { createdAt: "asc" },
       include: {
         members: {

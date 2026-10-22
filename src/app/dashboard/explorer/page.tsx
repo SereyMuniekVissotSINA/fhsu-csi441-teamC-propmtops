@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { PromptLibrary } from "@/components/prompt-library";
+import { PromptLibrary } from "@/components/demo/prompt-explorer";
 import { BackendUnavailable } from "@/components/backend-unavailable";
 import { isAuthReady } from "@/lib/backend-status";
 import { requireSessionPage } from "@/lib/authz";
@@ -42,6 +42,6 @@ export default async function ExplorerPage({ searchParams }: {
     <nav aria-label="Workspace libraries" className="mx-auto flex max-w-7xl flex-wrap gap-2 px-6 pt-6">
       {workspaces.map((item) => <Link key={item.id} className={action} aria-current={item.id === workspace.id ? "page" : undefined} href={`/dashboard/explorer?workspace=${encodeURIComponent(item.slug)}`}>{item.name}</Link>)}
     </nav>
-    <PromptLibrary key={workspace.id} workspace={workspace} prompts={library} />
+    <PromptLibrary key={workspace.id} workspace={workspace} initialPrompts={library} />
   </>;
 }

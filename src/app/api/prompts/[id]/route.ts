@@ -1,14 +1,24 @@
 import { NextResponse } from "next/server";
 
 import { failure, invalid, readJson } from "@/lib/api";
-import { authorIdFor, requireCallerPrompt } from "@/lib/api-auth";
+import { AuthzError, requireMember } from "@/lib/authz";
 import { prisma } from "@/lib/prisma";
 import { updatePromptSchema } from "@/lib/validations";
 
-export async function GET(request: Request, { params }: RouteContext<"/api/prompts/[id]">) {
+async function loadPrompt(id: string) {
+  const prompt = await prisma.prompt.findUnique({
+    where: { id },
+    select: { id: true, workspaceId: true },
+  });
+  if (!prompt) throw new AuthzError(404, "Prompt not found.");
+  return prompt;
+}
+
+export async function GET(_request: Request, { params }: RouteContext<"/api/prompts/[id]">) {
   try {
     const { id } = await params;
-    await requireCallerPrompt(request, id);
+    const { workspaceId } = await loadPrompt(id);
+    await requireMember(workspaceId);
 
     const prompt = await prisma.prompt.findUnique({
       where: { id },
@@ -29,11 +39,13 @@ export async function GET(request: Request, { params }: RouteContext<"/api/promp
 }
 
 // Editing appends a version rather than mutating the current one — that is what
-// makes the history view possible.
+// makes the history view possible, and it mirrors `appendVersion` in
+// `src/lib/demo-prompts.ts`.
 export async function PATCH(request: Request, { params }: RouteContext<"/api/prompts/[id]">) {
   try {
     const { id } = await params;
-    const { caller } = await requireCallerPrompt(request, id, "EDITOR");
+    const { workspaceId } = await loadPrompt(id);
+    const { session } = await requireMember(workspaceId, "EDITOR");
 
     const parsed = updatePromptSchema.safeParse(await readJson(request));
     if (!parsed.success) return invalid(parsed.error);
@@ -45,7 +57,7 @@ export async function PATCH(request: Request, { params }: RouteContext<"/api/pro
       data: {
         // Keep the denormalized title in step with the newest version.
         title,
-        versions: { create: { title, body, tags, note, authorId: authorIdFor(caller) } },
+        versions: { create: { title, body, tags, note, authorId: session.user.id } },
       },
       include: { versions: { orderBy: { createdAt: "desc" }, take: 1 } },
     });
@@ -56,10 +68,11 @@ export async function PATCH(request: Request, { params }: RouteContext<"/api/pro
   }
 }
 
-export async function DELETE(request: Request, { params }: RouteContext<"/api/prompts/[id]">) {
+export async function DELETE(_request: Request, { params }: RouteContext<"/api/prompts/[id]">) {
   try {
     const { id } = await params;
-    await requireCallerPrompt(request, id, "EDITOR");
+    const { workspaceId } = await loadPrompt(id);
+    await requireMember(workspaceId, "EDITOR");
 
     // Versions cascade with the prompt (see onDelete in schema.prisma).
     await prisma.prompt.delete({ where: { id } });

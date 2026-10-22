@@ -1,9 +1,9 @@
-import { variableNames, type PromptRecord } from "./prompts-core";
+import { variableNames, type DemoPrompt } from "./demo-prompts";
 
 export type GraphNode = { id: string; label: string; kind: "prompt" | "tag" | "variable" | "version"; promptId?: string; versionId?: string; x: number; y: number };
 export type GraphEdge = { source: string; target: string };
 
-export function buildPromptGraph(prompts: PromptRecord[], options: { tags: boolean; variables: boolean; versions: boolean }) {
+export function buildPromptGraph(prompts: DemoPrompt[], options: { tags: boolean; variables: boolean; versions: boolean }) {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
   const known = new Set<string>();

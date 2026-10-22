@@ -72,11 +72,11 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
         </div>
 
         <p className="mt-6 text-center text-xs text-zinc-500">
-          No account yet?{" "}
-          <Link className="text-zinc-300 hover:underline" href="/register">
-            Create one
-          </Link>
-          .
+          Just exploring?{" "}
+          <Link className="text-zinc-300 hover:underline" href="/demo">
+            Open the demo
+          </Link>{" "}
+          — no account needed.
         </p>
       </div>
     </main>

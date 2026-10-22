@@ -6,8 +6,6 @@
     "Prisma.prisma",
     "oven.bun-vscode",
     "usernamehw.errorlens",
-    "streetsidesoftware.code-spell-checker",
-    "GitHub.copilot",
-    "GitHub.copilot-chat"
+    "streetsidesoftware.code-spell-checker"
   ]
 }

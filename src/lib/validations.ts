@@ -46,18 +46,9 @@ export const updatePromptSchema = promptSchema.extend({
   note: z.string().trim().max(240).default("Updated prompt"),
 });
 
-// A code-generation run: the composed prompt to send, plus an optional commit
-// message for the code it produces. The input cap matches the run routes.
-export const generateCodeSchema = z.object({
-  input: z.string().trim().min(1, "Nothing to send").max(16000),
-  message: z.string().trim().max(240).default(""),
-  promptVersionId: z.string().min(1).optional(),
-});
-
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type PromptInput = z.infer<typeof promptSchema>;
 export type CreateWorkspaceInput = z.infer<typeof createWorkspaceSchema>;
 export type CreatePromptInput = z.infer<typeof createPromptSchema>;
 export type UpdatePromptInput = z.infer<typeof updatePromptSchema>;
-export type GenerateCodeInput = z.infer<typeof generateCodeSchema>;

@@ -35,7 +35,7 @@ export async function GET(_request: Request, { params }: RouteContext<"/api/work
 export async function POST(request: Request, { params }: RouteContext<"/api/workspaces/[id]/keys">) {
   try {
     const { id } = await params;
-    const { session } = await requireMember(id, "OWNER");
+    await requireMember(id, "OWNER");
 
     const parsed = createApiKeySchema.safeParse(await readJson(request));
     if (!parsed.success) return invalid(parsed.error);
@@ -43,15 +43,7 @@ export async function POST(request: Request, { params }: RouteContext<"/api/work
     const { key, hashedKey, prefix } = generateApiKey();
 
     const created = await prisma.apiKey.create({
-      // The creator is recorded so requests made with this key have an author
-      // to attribute writes to (see `requireAuthorId` in src/lib/api-auth.ts).
-      data: {
-        workspaceId: id,
-        name: parsed.data.name,
-        hashedKey,
-        prefix,
-        createdById: session.user.id,
-      },
+      data: { workspaceId: id, name: parsed.data.name, hashedKey, prefix },
       select: { id: true, name: true, prefix: true, createdAt: true },
     });
 

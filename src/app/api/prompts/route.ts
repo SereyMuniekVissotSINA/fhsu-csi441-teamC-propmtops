@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { failure, invalid, readJson } from "@/lib/api";
-import { requireCaller, requireCallerWorkspace, requireAuthorId } from "@/lib/api-auth";
+import { requireMember, requireSession } from "@/lib/authz";
 import { prisma } from "@/lib/prisma";
 import { createPromptSchema } from "@/lib/validations";
 
@@ -9,22 +9,17 @@ import { createPromptSchema } from "@/lib/validations";
 // to, and nothing else.
 export async function GET(request: Request) {
   try {
-    const caller = await requireCaller(request);
+    const session = await requireSession();
     const workspaceId = new URL(request.url).searchParams.get("workspaceId");
 
-    // Scoping to one workspace still goes through the caller check, so a
-    // guessed id cannot be used to read someone else's prompts.
-    if (workspaceId) await requireCallerWorkspace(request, workspaceId);
-
-    // A key sees exactly its own workspace; a session sees every workspace it
-    // belongs to.
-    const scope =
-      caller.kind === "key"
-        ? { workspaceId: caller.workspaceId }
-        : { workspace: { members: { some: { userId: caller.userId } } } };
+    // Scoping to one workspace still goes through requireMember, so a guessed
+    // id cannot be used to read someone else's prompts.
+    if (workspaceId) await requireMember(workspaceId);
 
     const prompts = await prisma.prompt.findMany({
-      where: workspaceId ? { workspaceId } : scope,
+      where: workspaceId
+        ? { workspaceId }
+        : { workspace: { members: { some: { userId: session.user.id } } } },
       orderBy: { updatedAt: "desc" },
       take: 50,
       include: {
@@ -48,15 +43,14 @@ export async function POST(request: Request) {
     if (!parsed.success) return invalid(parsed.error);
 
     const { workspaceId, title, body, tags } = parsed.data;
-    const { caller } = await requireCallerWorkspace(request, workspaceId, "EDITOR");
-    const authorId = requireAuthorId(caller);
+    const { session } = await requireMember(workspaceId, "EDITOR");
 
     // A prompt and its first version are created together: a prompt with no
     // versions would have nothing to render.
     const prompt = await prisma.prompt.create({
       data: {
         workspaceId,
-        authorId,
+        authorId: session.user.id,
         title,
         versions: {
           create: {
@@ -64,7 +58,7 @@ export async function POST(request: Request) {
             body,
             tags,
             note: "Initial version",
-            authorId,
+            authorId: session.user.id,
           },
         },
       },

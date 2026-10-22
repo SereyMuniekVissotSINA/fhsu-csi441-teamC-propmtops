@@ -3,11 +3,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { canEdit, requireSessionPage } from "@/lib/authz";
-import { commitStats } from "@/lib/code-commits";
 import { prisma } from "@/lib/prisma";
-import { isAITestingEnabled, listPromptFiles } from "@/lib/prompt-files";
 
-import { DeletePrompt } from "./delete-prompt";
 import { PromptEditor } from "./editor";
 
 export const metadata: Metadata = {
@@ -37,7 +34,7 @@ export default async function PromptPage({
         },
       },
       versions: {
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        orderBy: { createdAt: "desc" },
         include: { author: { select: { name: true } } },
       },
     },
@@ -46,28 +43,6 @@ export default async function PromptPage({
   if (!prompt || prompt.versions.length === 0) notFound();
 
   const role = prompt.workspace.members[0]?.role ?? "VIEWER";
-
-  // The generated-code history, newest first. File contents are left out here
-  // and fetched per commit by the log, so opening a prompt with a long history
-  // does not ship every file it ever produced.
-  const commits = await prisma.codeCommit.findMany({
-    where: { promptId: prompt.id },
-    orderBy: { sequence: "desc" },
-    include: {
-      author: { select: { name: true } },
-      files: {
-        orderBy: { path: "asc" },
-        select: {
-          path: true,
-          hash: true,
-          language: true,
-          change: true,
-          added: true,
-          removed: true,
-        },
-      },
-    },
-  });
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
@@ -80,33 +55,11 @@ export default async function PromptPage({
         </Link>
       </nav>
 
-      <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">{prompt.title}</h1>
-        <Link className="rounded-lg border border-emerald-700 px-4 py-2 text-sm text-emerald-400 hover:bg-emerald-950/40"
-          href={`/dashboard/prompts/${id}/analytics`}>Token usage &amp; savings</Link>
-      </div>
+      <h1 className="mb-8 text-2xl font-semibold">{prompt.title}</h1>
 
       <PromptEditor
         id={prompt.id}
         editable={canEdit(role)}
-        commits={commits.map((commit) => ({
-          id: commit.id,
-          sequence: commit.sequence,
-          message: commit.message,
-          parentId: commit.parentId,
-          promptVersionId: commit.promptVersionId,
-          model: commit.model,
-          elapsedMs: commit.elapsedMs,
-          inputTokens: commit.inputTokens,
-          outputTokens: commit.outputTokens,
-          incomplete: commit.incomplete,
-          createdAt: commit.createdAt.toISOString(),
-          authorName: commit.author?.name ?? null,
-          stats: commitStats(commit.files),
-          files: commit.files,
-        }))}
-        initialFiles={await listPromptFiles(prompt.id)}
-        aiTestingEnabled={isAITestingEnabled()}
         versions={prompt.versions.map((version) => ({
           id: version.id,
           title: version.title,
@@ -118,16 +71,6 @@ export default async function PromptPage({
           authorName: version.author?.name ?? null,
         }))}
       />
-
-      {canEdit(role) && (
-        <section className="mt-10 border-t border-zinc-800 pt-6">
-          <h2 className="mb-1 text-sm font-medium text-zinc-300">Danger zone</h2>
-          <p className="mb-4 text-xs text-zinc-500">
-            Removes this prompt and its history from the database.
-          </p>
-          <DeletePrompt id={prompt.id} title={prompt.title} />
-        </section>
-      )}
     </main>
   );
 }
