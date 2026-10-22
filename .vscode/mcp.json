@@ -1,0 +1,33 @@
+{
+  // Exposes the Prompt_Ops prompt library to GitHub Copilot Chat's agent mode.
+  //
+  // Nothing here works until `src/mcp/index.ts` exists — Copilot will show the
+  // server as failed-to-start. See the Copilot Chat section in README.md.
+  "inputs": [
+    {
+      // Asked once and kept in VS Code's secret storage, so this file stays
+      // committable. Remove this input (and the env entry below) if you would
+      // rather let the server read the key `pops login` already stored in
+      // ~/.config/promptops/config.json.
+      "id": "pops-api-key",
+      "type": "promptString",
+      "description": "Prompt_Ops workspace API key (pops_...)",
+      "password": true
+    }
+  ],
+  "servers": {
+    "prompt-ops": {
+      "type": "stdio",
+      // Matches how the CLI is launched in package.json: `bun src/cli/index.ts`.
+      "command": "bun",
+      "args": ["src/mcp/index.ts"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        // Same names the CLI reads in src/cli/config.ts, where an environment
+        // variable takes precedence over the stored config file.
+        "POPS_URL": "http://localhost:3000",
+        "POPS_API_KEY": "${input:pops-api-key}"
+      }
+    }
+  }
+}

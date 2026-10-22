@@ -1,11 +1,10 @@
 import { cn } from "@/lib/utils";
 
-// Shared class strings for the database-backed pages, matching the visual
-// language the landing page and demo already use (#080808 / zinc / emerald).
+// Shared class strings for the application's pages, matching the visual
+// language the landing page uses (#080808 / zinc / emerald).
 //
-// The demo defines its own copies inline in `src/components/demo/workspace.tsx`.
-// They are deliberately not refactored to import these: the demo is the offline
-// fallback and stays untouched, so a change here can never break it.
+// One definition per control, so a styling change lands everywhere at once
+// rather than drifting between the dashboard, the library and the editor.
 
 export const action =
   "inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-400 disabled:cursor-not-allowed disabled:opacity-40";
@@ -13,6 +12,12 @@ export const action =
 export const primary = cn(
   action,
   "border-emerald-500 bg-emerald-500 text-black hover:bg-emerald-400",
+);
+
+/** For destructive controls, so "delete" never looks like "save". */
+export const danger = cn(
+  action,
+  "border-red-900 text-red-300 hover:border-red-700 hover:bg-red-950/40",
 );
 
 export const field =

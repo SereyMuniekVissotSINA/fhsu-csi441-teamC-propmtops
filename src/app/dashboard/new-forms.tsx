@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 
 import { field, primary } from "@/lib/ui";
+import { FileUploadField } from "@/components/file-upload-field";
 
 import { createPromptAction, createWorkspaceAction, type FormState } from "./actions";
 
@@ -67,6 +68,8 @@ export function NewPromptForm({ workspaceId }: { workspaceId: string }) {
         placeholder="Tags, comma separated"
         aria-label="Tags"
       />
+
+      <FileUploadField disabled={pending} />
 
       {state.error ? (
         <p role="alert" className="text-sm text-red-400">

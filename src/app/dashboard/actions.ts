@@ -6,19 +6,22 @@ import { redirect } from "next/navigation";
 import { signOut } from "@/auth";
 import { AuthzError, requireMember, requireSession } from "@/lib/authz";
 import { prisma } from "@/lib/prisma";
+import { prepareUploads } from "@/lib/file-codecs";
+import { FileInputError } from "@/lib/file-policy";
 import {
   createPromptSchema,
   createWorkspaceSchema,
   updatePromptSchema,
 } from "@/lib/validations";
 
-export type FormState = { error?: string };
+export type FormState = { error?: string; success?: boolean };
 
 export async function signOutAction() {
   await signOut({ redirectTo: "/" });
 }
 
 function messageOf(error: unknown) {
+  if (error instanceof FileInputError) return error.message;
   if (error instanceof AuthzError) return error.message;
   console.error(error);
   return "Something went wrong. Please try again.";
@@ -72,12 +75,14 @@ export async function createPromptAction(
   try {
     const { workspaceId, title, body, tags } = parsed.data;
     const { session } = await requireMember(workspaceId, "EDITOR");
+    const files = await prepareUploads(formData, session.user.id);
 
     const prompt = await prisma.prompt.create({
       data: {
         workspaceId,
         authorId: session.user.id,
         title,
+        files: { create: files },
         versions: {
           create: { title, body, tags, note: "Initial version", authorId: session.user.id },
         },
@@ -132,7 +137,51 @@ export async function savePromptAction(
 
   revalidatePath(`/dashboard/prompts/${id}`);
   revalidatePath("/dashboard");
-  return {};
+  return { success: true };
+}
+
+/**
+ * Delete a prompt outright.
+ *
+ * This is the one destructive operation in the product, and it is deliberately
+ * not an append: a prompt's versions and the code commits generated from it all
+ * cascade with it (see `onDelete` in schema.prisma). Append-only governs edits
+ * — restoring an old version writes a new one — but a prompt the workspace no
+ * longer wants should not have to live forever to preserve that.
+ *
+ * EDITOR is the bar, matching `DELETE /api/prompts/[id]`, so a viewer cannot
+ * reach it even by posting the form directly.
+ */
+export async function deletePromptAction(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = String(formData.get("id") ?? "");
+
+  let slug: string;
+  try {
+    // Session first: looking the prompt up before authenticating would answer
+    // "does this id exist?" for anyone, since a missing row returns 404 where a
+    // real one returns 401.
+    await requireSession();
+
+    const prompt = await prisma.prompt.findUnique({
+      where: { id },
+      select: { workspaceId: true, workspace: { select: { slug: true } } },
+    });
+    if (!prompt) throw new AuthzError(404, "Prompt not found.");
+
+    await requireMember(prompt.workspaceId, "EDITOR");
+    await prisma.prompt.delete({ where: { id } });
+    slug = prompt.workspace.slug;
+  } catch (error) {
+    return { error: messageOf(error) };
+  }
+
+  // Outside the try, as above: redirect signals itself by throwing.
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/explorer");
+  redirect(`/dashboard?workspace=${slug}`);
 }
 
 async function uniqueSlug(name: string): Promise<string> {
