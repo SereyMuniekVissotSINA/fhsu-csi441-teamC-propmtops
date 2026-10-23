@@ -29,6 +29,9 @@ export async function isDatabaseReady(): Promise<boolean> {
       // itself as not ready rather than fail mid-render.
       prisma.codeCommit.findFirst({ select: { id: true } }),
       prisma.codeFile.findFirst({ select: { id: true } }),
+      // And the agent-run tables, which /dashboard/runs reads.
+      prisma.agentRun.findFirst({ select: { id: true } }),
+      prisma.agentRunFile.findFirst({ select: { id: true } }),
     ]);
     ready = true;
   } catch {

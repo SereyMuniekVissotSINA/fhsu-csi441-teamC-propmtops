@@ -15,7 +15,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:files": "node --import tsx --test src/lib/file-revisions.test.ts src/lib/openai-run.test.ts",
-    "test": "node --import tsx --test src/lib/prompts-core.test.ts src/lib/file-revisions.test.ts src/lib/api-keys.test.ts src/lib/roles.test.ts src/lib/prompt-graph.test.ts src/lib/code-commits.test.ts src/cli/cli.test.ts",
+    "test": "node --import tsx --test src/lib/prompts-core.test.ts src/lib/file-revisions.test.ts src/lib/api-keys.test.ts src/lib/roles.test.ts src/lib/prompt-graph.test.ts src/lib/code-commits.test.ts src/lib/agent-runs.test.ts src/cli/cli.test.ts src/cli/snapshot.test.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",

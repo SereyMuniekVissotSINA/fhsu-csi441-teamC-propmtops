@@ -1,11 +1,20 @@
 #!/usr/bin/env bun
 import { readFileSync } from "node:fs";
 import { hostname } from "node:os";
+import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
+import {
+  type AgentChange,
+  classifyLocalChanges,
+  describeRestore,
+  restoreSteps,
+  runStats,
+} from "@/lib/agent-runs";
 import { composePrompt, variableNames } from "@/lib/prompts-core";
 
 import { CliError, createClient, type Client } from "./client";
+import { ask, confirm } from "./confirm";
 import {
   DEFAULT_URL,
   clearConfig,
@@ -18,6 +27,13 @@ import {
 import { changeCount, paint, paintChange, renderDiff, table, truncate, when } from "./format";
 import { matchKey, matchPrompt, parseRange, parseRef, parseVariables } from "./resolve";
 import { askPassword, passwordSignIn } from "./session";
+import {
+  applyRestore,
+  localChanges,
+  suggestedName,
+  summariseCategories,
+  takeSnapshot,
+} from "./snapshot";
 
 // `pops` — the command-line client for Prompt Ops.
 //
@@ -49,6 +65,14 @@ Workflow
   log <prompt>                  The generated-code commit log
   commit <prompt> [c2]          One commit: files and metadata  (--diff, --file path)
 
+Agent runs (what an agent changed on this machine)
+  snapshot [name]               Baseline this project before the agent works
+  snapshots                     The snapshot categories here, and their drift
+  status [--diff]               What has changed since the active baseline
+  push --prompt "…"             Record the diff as a run  (--agent, --category)
+  restore <r7>                  Put a run's pre-run files back  (--yes)
+  restore --watch --yes         Apply restores asked for on the website
+
 Authentication
   auth login --email you@…      Sign in with your password, for the keys commands
   auth login --key pops_…       Store a key you already have
@@ -62,6 +86,13 @@ API keys (workspace owners, after \`auth login --email\`)
 
 Options
   --workspace <slug|id>   Which workspace to act in
+  --root <path>           Project directory for the run commands (default: cwd)
+  --category <name>       Act on this snapshot, without making it the active one
+  --prompt <text>         What the agent was asked for, recorded with the run
+  --agent <name>          Which agent did the work  (default: this host name)
+  --response <text>       The agent's own account of the run, kept for the record
+  --yes                   Do not ask before overwriting files in a restore
+  --watch                 Keep applying restores as the website asks for them
   --email <address>       Sign in as this user
   --password <text>       Skip the password prompt (prefer POPS_PASSWORD)
   --name <text>           Name for a new key
@@ -78,6 +109,15 @@ Options
 A prompt can be named by id, by a 6+ character id prefix, or by part of its
 title. Generating and running reach a model, so they need the app in
 development mode with a provider configured.
+
+A run is the other way round: the agent has already edited files here, and the
+diff against a baseline is what gets recorded, so \`push\` reaches no model and
+works against a deployed app.
+
+  pops snapshot                      # baseline, and name the work
+  # …let the agent edit files…
+  pops status --diff
+  pops push --prompt "what you asked for"
 
 First run, from nothing:
 
@@ -105,6 +145,13 @@ type Options = {
   password?: string;
   name?: string;
   save: boolean;
+  root?: string;
+  category?: string;
+  prompt?: string;
+  agent?: string;
+  response?: string;
+  yes: boolean;
+  watch: boolean;
 };
 
 async function main(argv: string[]): Promise<number> {
@@ -128,6 +175,13 @@ async function main(argv: string[]): Promise<number> {
       password: { type: "string" },
       name: { type: "string" },
       save: { type: "boolean", default: false },
+      root: { type: "string" },
+      category: { type: "string" },
+      prompt: { type: "string" },
+      agent: { type: "string" },
+      response: { type: "string" },
+      yes: { type: "boolean", default: false },
+      watch: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
     // `--diff` with no value, and unknown flags, should explain themselves
@@ -171,6 +225,18 @@ async function main(argv: string[]): Promise<number> {
       return log(client(), rest[0], options);
     case "commit":
       return commit(client(), rest[0], rest[1], options);
+    // The snapshot commands touch only the filesystem, so they need no client
+    // and work with the app down.
+    case "snapshot":
+      return snapshot(rest[0], options);
+    case "snapshots":
+      return snapshots(options);
+    case "status":
+      return status(options);
+    case "push":
+      return push(client(), options);
+    case "restore":
+      return restore(client(), rest[0], options);
     default:
       throw new CliError(`Unknown command "${command}". Run \`pops help\` for the list.`);
   }
@@ -938,6 +1004,368 @@ async function commit(
   }
   return 0;
 }
+
+// --- agent runs -------------------------------------------------------------
+//
+// The local half of the product: an agent edits files on this machine, and the
+// diff against a baseline taken beforehand becomes a run on the website. The
+// filesystem is the source of truth throughout — nothing here asks an agent
+// what it changed.
+
+type RunFileSummary = {
+  path: string;
+  language: string;
+  change: AgentChange;
+  added: number;
+  removed: number;
+};
+
+type RunSummary = {
+  id: string;
+  sequence: number;
+  workspace?: { id: string; name: string; slug: string };
+  category: string;
+  categorySlug: string;
+  agent: string;
+  root: string;
+  prompt: string;
+  summary: string;
+  stats: { files: number; added: number; removed: number };
+  authorName: string | null;
+  restoreRequestedAt: string | null;
+  restoredAt: string | null;
+  createdAt: string;
+  files: RunFileSummary[];
+};
+
+type RunDetail = RunSummary & {
+  response: string;
+  files: (RunFileSummary & { before: string; after: string })[];
+};
+
+/** Where the commands act: `--root`, or the directory the CLI was run from. */
+function projectRoot(options: Options): string {
+  return resolve(options.root ?? process.cwd());
+}
+
+/**
+ * Take a baseline, naming it if the user did not.
+ *
+ * The name is asked for right after the copy is made, which is the moment the
+ * developer actually knows what the work is called. With no terminal to ask on
+ * the suggestion is accepted silently — a hook taking a baseline should not
+ * hang on a question nobody will answer.
+ */
+async function snapshot(name: string | undefined, options: Options): Promise<number> {
+  const root = projectRoot(options);
+  const chosen = name ?? options.category ?? (await ask("Name this snapshot", suggestedName(root)));
+  const { snapshot: taken, category, created } = takeSnapshot(root, chosen);
+
+  if (options.json) return print({ category, files: Object.keys(taken.files).length });
+
+  const count = Object.keys(taken.files).length;
+  console.log(
+    `${created ? "Started" : "Re-baselined"} ${paint(category.name, "bold")} from ${count} file${
+      count === 1 ? "" : "s"
+    }.`,
+  );
+  if (taken.skipped.length > 0) {
+    console.log(
+      paint(
+        `  ${taken.skipped.length} file${
+          taken.skipped.length === 1 ? "" : "s"
+        } left untracked (binary or too large), and excluded from both sides of the diff.`,
+        "dim",
+      ),
+    );
+  }
+  console.log(paint("Let the agent work, then `pops push --prompt \"what you asked for\"`.", "dim"));
+  return 0;
+}
+
+/** Every category in this project, and how far each has drifted. */
+function snapshots(options: Options): number {
+  const root = projectRoot(options);
+  const { index, rows } = summariseCategories(root);
+  if (options.json) return print(rows);
+  if (rows.length === 0) {
+    return say(`No snapshots in ${root}. Start one with \`pops snapshot\`.`);
+  }
+
+  console.log(
+    table([
+      ["", "NAME", "FILES", "CHANGED", "BASELINE"],
+      ...rows.map((row) => [
+        row.slug === index.active ? paint("*", "green") : " ",
+        row.name,
+        String(row.files),
+        row.changed === null ? paint("no baseline", "dim") : String(row.changed),
+        row.takenAt ? when(row.takenAt) : paint("never", "dim"),
+      ]),
+    ]),
+  );
+  return 0;
+}
+
+/** What has changed under the active baseline, without pushing anything. */
+function status(options: Options): number {
+  const root = projectRoot(options);
+  const { category, snapshot: baseline, changes } = localChanges(root, options.category);
+  const files = classifyLocalChanges(changes);
+  if (options.json) return print({ category, baselineAt: baseline.takenAt, files });
+
+  console.log(
+    `${paint(category.name, "bold")} · baseline ${when(baseline.takenAt)} · ${root}`,
+  );
+  if (files.length === 0) {
+    return say(paint("Nothing has changed since that baseline.", "dim"));
+  }
+
+  const stats = runStats(files);
+  for (const file of files) {
+    console.log(
+      `  ${paintChange(file.change)} ${file.path} ${changeCount(file.added, file.removed)}`,
+    );
+    if (options.diff) console.log(renderDiff(file.before, file.after));
+  }
+  console.log(
+    paint(
+      `\n${stats.files} file${stats.files === 1 ? "" : "s"} · +${stats.added} −${stats.removed}`,
+      "dim",
+    ),
+  );
+  return 0;
+}
+
+/** Record the run: the diff against the baseline, pushed to the website. */
+async function push(client: Client, options: Options): Promise<number> {
+  const root = projectRoot(options);
+  const { category, snapshot: baseline, changes } = localChanges(root, options.category);
+  if (changes.length === 0) {
+    return say(
+      `Nothing has changed in ${root} since the ${category.name} baseline, so there is no run to push.`,
+    );
+  }
+
+  const workspace = await runWorkspace(client, options);
+  const run = await client.request<RunSummary>("/api/runs", {
+    method: "POST",
+    body: JSON.stringify({
+      workspaceId: workspace.id,
+      category: category.name,
+      baselineAt: baseline.takenAt || null,
+      // Free text, and the host name is a reasonable default: it says which
+      // machine the files are on, which is what a restore needs to know.
+      agent: options.agent ?? `${hostname()}`,
+      root,
+      prompt: options.prompt ?? options.message ?? "",
+      response: options.response ?? "",
+      files: changes.map((file) => ({
+        path: file.path,
+        before: file.before,
+        after: file.after,
+      })),
+    }),
+  });
+
+  // The baseline moves to what was just recorded, so the next run measures
+  // from here rather than re-pushing the same diff. A one-off `--category`
+  // stays one-off: it does not become the working category.
+  takeSnapshot(root, category.name, { makeActive: !options.category });
+
+  if (options.json) return print(run);
+
+  console.log(
+    `${paint(`r${run.sequence}`, "cyan")} ${paint(run.summary, "bold")} ${paint(
+      `in ${category.name}`,
+      "dim",
+    )}`,
+  );
+  for (const file of run.files) {
+    console.log(
+      `  ${paintChange(file.change)} ${file.path} ${changeCount(file.added, file.removed)}`,
+    );
+  }
+  console.log(
+    paint(
+      `\n${client.url}/dashboard/runs/${run.id}\nBaseline re-taken, so the next push is the next run.`,
+      "dim",
+    ),
+  );
+  return 0;
+}
+
+/**
+ * Which workspace the run commands act in.
+ *
+ * A key is scoped to one workspace, so the usual case needs no flag. Picking
+ * one of several silently would be worse than asking: run numbers are per
+ * workspace, so `r7` means a different run in each, and a push would be filed
+ * somewhere the developer was not thinking about.
+ */
+async function runWorkspace(client: Client, options: Options) {
+  const list = await client.request<Workspace[]>("/api/workspaces");
+  if (options.workspace) {
+    const chosen = list.find(
+      (candidate) => candidate.slug === options.workspace || candidate.id === options.workspace,
+    );
+    if (!chosen) {
+      const slugs = list.map((candidate) => candidate.slug).join(", ") || "none";
+      throw new CliError(`No workspace "${options.workspace}". You can reach: ${slugs}.`);
+    }
+    return chosen;
+  }
+  if (list.length === 0) throw new CliError("No workspace to push to.");
+  if (list.length > 1) {
+    const slugs = list.map((candidate) => candidate.slug).join(", ");
+    throw new CliError(`You can reach several workspaces. Pass --workspace <${slugs}>.`);
+  }
+  return list[0];
+}
+
+/**
+ * Undo a run on this machine.
+ *
+ * This is the only command that writes to the working directory, which is why
+ * it prints the plan and asks first unless `--yes` was passed. `--watch` picks
+ * up restores asked for on the website and applies them as they arrive — the
+ * other side of the handshake the dashboard button starts.
+ */
+async function restore(
+  client: Client,
+  ref: string | undefined,
+  options: Options,
+): Promise<number> {
+  if (options.watch) return watchRestores(client, options);
+
+  const run = await resolveRun(client, ref, options);
+  return applyRun(client, run, options);
+}
+
+/** Resolve `r7`, an id, or an id prefix to one run the caller can reach. */
+async function resolveRun(
+  client: Client,
+  ref: string | undefined,
+  options: Options,
+): Promise<RunDetail> {
+  if (!ref) {
+    throw new CliError(
+      "Which run? Pass `r7` or a run id, or use `--watch` to apply restores asked for on the website.",
+    );
+  }
+
+  const sequence = parseRef(ref, "r");
+  const workspace = await runWorkspace(client, options);
+  const { runs } = await client.request<{ runs: RunSummary[] }>(
+    `/api/runs?workspaceId=${workspace.id}`,
+  );
+  const match = sequence
+    ? runs.find((candidate) => candidate.sequence === sequence)
+    : runs.find((candidate) => candidate.id === ref || candidate.id.startsWith(ref));
+  if (!match) {
+    const newest = runs[0] ? `The newest is r${runs[0].sequence}.` : "There are no runs yet.";
+    throw new CliError(`No run ${ref} in reach. ${newest}`);
+  }
+  return client.request<RunDetail>(`/api/runs/${match.id}`);
+}
+
+/** Show the plan, ask, write, and tell the website it was done. */
+async function applyRun(client: Client, run: RunDetail, options: Options): Promise<number> {
+  const root = projectRoot(options);
+  const steps = restoreSteps(run.files);
+
+  // The run records where it was pushed from. Restoring somewhere else is
+  // legitimate — a second clone, a different machine — but it is worth saying
+  // out loud, because the files about to be overwritten are not the ones the
+  // run was measured against.
+  if (run.root && run.root !== root) {
+    console.log(paint(`This run was pushed from ${run.root}.`, "yellow"));
+  }
+
+  console.log(
+    `${paint(`r${run.sequence}`, "cyan")} ${run.summary} ${paint(
+      `· ${run.category || "uncategorised"} · ${when(run.createdAt)}`,
+      "dim",
+    )}`,
+  );
+  console.log(`Undoing it in ${paint(root, "bold")}: ${describeRestore(steps)}.`);
+  for (const step of steps) {
+    console.log(
+      step.action === "delete"
+        ? `  ${paint("D", "red")} ${step.path}`
+        : `  ${paint("W", "yellow")} ${step.path}`,
+    );
+  }
+  console.log(
+    paint("Anything changed in those files since the run is lost. The run stays in the log.", "dim"),
+  );
+
+  if (!options.yes && !(await confirm("Write these files?"))) {
+    return say("Left alone.");
+  }
+
+  const applied = applyRestore(root, steps);
+  const failed = applied.filter((step) => step.action === "skipped");
+  for (const step of failed) {
+    console.log(paint(`  skipped ${step.path}: ${step.note ?? "unknown reason"}`, "yellow"));
+  }
+
+  // Reported even when some files were skipped: the request has been dealt
+  // with, and leaving it pending would have the website ask again forever.
+  await client.request(`/api/runs/${run.id}/restore`, {
+    method: "POST",
+    body: JSON.stringify({ action: "applied" }),
+  });
+
+  const done = applied.length - failed.length;
+  console.log(
+    `Restored ${done} of ${applied.length} file${applied.length === 1 ? "" : "s"} for r${
+      run.sequence
+    }.`,
+  );
+  return failed.length > 0 ? 1 : 0;
+}
+
+/**
+ * Apply restores as the website asks for them.
+ *
+ * Polling rather than anything cleverer: the app has no outbound channel to a
+ * laptop, and a request that waits ten seconds is a request nobody notices
+ * waiting. There is no terminal to confirm on in the usual case — this is left
+ * running in a spare pane — so `--yes` is required up front rather than
+ * assumed per run.
+ */
+async function watchRestores(client: Client, options: Options): Promise<number> {
+  if (!options.yes) {
+    throw new CliError(
+      "`--watch` applies restores without asking each time, so it needs `--yes`.\n" +
+        "Run it in the project you want restores applied to.",
+    );
+  }
+
+  const root = projectRoot(options);
+  const workspace = await runWorkspace(client, options);
+  console.log(
+    `Watching ${client.url} for ${workspace.slug} restores to apply in ${paint(root, "bold")}.`,
+  );
+  console.log(paint("Ctrl-C to stop.", "dim"));
+
+  for (;;) {
+    const { runs } = await client.request<{ runs: RunSummary[] }>(
+      `/api/runs?pendingRestore=1&workspaceId=${workspace.id}`,
+    );
+    for (const summary of runs) {
+      const run = await client.request<RunDetail>(`/api/runs/${summary.id}`);
+      console.log();
+      await applyRun(client, run, { ...options, yes: true });
+    }
+    await new Promise((done) => setTimeout(done, WATCH_INTERVAL_MS));
+  }
+}
+
+// Long enough not to hammer the app from a pane left open all afternoon, short
+// enough that clicking Restore on the website feels answered.
+const WATCH_INTERVAL_MS = 10_000;
 
 // --- plumbing ---------------------------------------------------------------
 

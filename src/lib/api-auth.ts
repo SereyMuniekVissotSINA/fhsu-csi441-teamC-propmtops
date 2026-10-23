@@ -153,6 +153,42 @@ export async function requireCallerPrompt(
   return { caller, role, workspaceId: prompt.workspaceId };
 }
 
+/**
+ * Assert the caller may act on `runId`, and hand back its workspace.
+ *
+ * Same order as above, and for the same reason: a lookup before the caller is
+ * identified would answer "does this run exist?" for anyone, since a missing
+ * row returns 404 where a real one returns 401. A non-member — and a key from
+ * another workspace — gets 404 rather than 403, so neither can confirm that a
+ * run id belongs to somebody.
+ */
+export async function requireCallerRun(
+  request: Request,
+  runId: string,
+  minimum: WorkspaceRole = "VIEWER",
+): Promise<{ caller: Caller; role: WorkspaceRole; workspaceId: string }> {
+  const caller = await requireCaller(request);
+
+  const run = await prisma.agentRun.findUnique({
+    where: { id: runId },
+    select: { workspaceId: true },
+  });
+  if (!run) throw new AuthzError(404, "Run not found.");
+
+  if (caller.kind === "key") {
+    if (caller.workspaceId !== run.workspaceId) {
+      throw new AuthzError(404, "Run not found.");
+    }
+    if (!atLeast(KEY_ROLE, minimum)) {
+      throw new AuthzError(403, `An API key cannot perform this action; it acts as ${KEY_ROLE}.`);
+    }
+    return { caller, role: KEY_ROLE, workspaceId: run.workspaceId };
+  }
+
+  const { role } = await requireMember(run.workspaceId, minimum);
+  return { caller, role, workspaceId: run.workspaceId };
+}
+
 /** Author for records that keep one optionally — versions, code commits. */
 export function authorIdFor(caller: Caller): string | null {
   return caller.userId;

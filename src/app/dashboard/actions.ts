@@ -179,6 +179,62 @@ export async function deletePromptAction(
   redirect(`/dashboard?workspace=${slug}`);
 }
 
+/**
+ * Ask for an agent run to be undone, or withdraw that request.
+ *
+ * Deliberately not an undo. Nothing in the browser can write to a developer's
+ * working directory, and nothing in this project should be able to reach into
+ * one on its own, so this only stamps the request on the run; `pops restore`
+ * running on the machine that holds the files is what rewrites anything, and it
+ * reports back through `POST /api/runs/[id]/restore`.
+ *
+ * The run itself is never edited — the log still says what the agent did after
+ * the change has been undone.
+ *
+ * EDITOR is the bar, matching that route: asking for an undo is a write to the
+ * project, so a viewer can read the diff and nothing more.
+ */
+export async function requestRestoreAction(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = String(formData.get("id") ?? "");
+  const cancel = formData.get("cancel") === "1";
+
+  try {
+    // Session first, as in `deletePromptAction`: looking the run up before
+    // authenticating would answer "does this id exist?" for anyone.
+    const session = await requireSession();
+
+    const run = await prisma.agentRun.findUnique({
+      where: { id },
+      select: { workspaceId: true },
+    });
+    if (!run) throw new AuthzError(404, "Run not found.");
+
+    await requireMember(run.workspaceId, "EDITOR");
+
+    await prisma.agentRun.update({
+      where: { id },
+      data: cancel
+        ? { restoreRequestedAt: null, restoreRequestedById: null }
+        : {
+            restoreRequestedAt: new Date(),
+            restoreRequestedById: session.user.id,
+            // Asking again after an undo was already applied is a fresh
+            // request, not a stale one, so the old stamp is cleared.
+            restoredAt: null,
+          },
+    });
+  } catch (error) {
+    return { error: messageOf(error) };
+  }
+
+  revalidatePath(`/dashboard/runs/${id}`);
+  revalidatePath("/dashboard/runs");
+  return {};
+}
+
 async function uniqueSlug(name: string): Promise<string> {
   const base =
     name

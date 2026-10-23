@@ -81,11 +81,14 @@ export function parseVariables(pairs: string[]): Record<string, string> {
   return values;
 }
 
+/** The letters the ref forms use: a prompt version, a code commit, an agent run. */
+export type Letter = "v" | "c" | "r";
+
 /**
- * `v2`, `2`, or a commit's `c3` — the numbers the history and log views print,
- * rather than ids nobody can remember.
+ * `v2`, `2`, a commit's `c3`, or an agent run's `r7` — the numbers the history,
+ * log and run views print, rather than ids nobody can remember.
  */
-export function parseRef(ref: string, letter: "v" | "c"): number | null {
+export function parseRef(ref: string, letter: Letter): number | null {
   const match = new RegExp(`^${letter}?(\\d+)$`, "i").exec(ref.trim());
   if (!match) return null;
   const value = Number(match[1]);
@@ -93,7 +96,7 @@ export function parseRef(ref: string, letter: "v" | "c"): number | null {
 }
 
 /** `v1..v3`, the way git spells a range. */
-export function parseRange(range: string, letter: "v" | "c"): [number, number] | null {
+export function parseRange(range: string, letter: Letter): [number, number] | null {
   const parts = range.split("..");
   if (parts.length !== 2) return null;
   const from = parseRef(parts[0], letter);

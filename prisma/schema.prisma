@@ -24,13 +24,17 @@ model User {
   passwordHash  String?
   role          Role      @default(USER)
 
-  accounts       Account[]
-  sessions       Session[]
-  prompts        Prompt[]
-  memberships    Membership[]
-  promptVersions PromptVersion[]
-  codeCommits    CodeCommit[]
-  apiKeys        ApiKey[]
+  accounts        Account[]
+  sessions        Session[]
+  prompts         Prompt[]
+  memberships     Membership[]
+  promptVersions  PromptVersion[]
+  codeCommits     CodeCommit[]
+  apiKeys         ApiKey[]
+  agentRuns       AgentRun[]      @relation("AgentRunAuthor")
+  // Restores this user asked for. Separate from `agentRuns` because asking for
+  // an undo and having made the run are different people's actions.
+  restoreRequests AgentRun[]      @relation("AgentRunRestorer")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -99,9 +103,10 @@ model Workspace {
   name String
   slug String @unique
 
-  members Membership[]
-  prompts Prompt[]
-  apiKeys ApiKey[]
+  members   Membership[]
+  prompts   Prompt[]
+  apiKeys   ApiKey[]
+  agentRuns AgentRun[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -272,20 +277,20 @@ model CodeFile {
 // Original uploads and AI revisions are immutable snapshots. Bytes live in
 // PostgreSQL so they survive restarts and never enter the public asset folder.
 model PromptFile {
-  id           String @id @default(cuid())
+  id           String              @id @default(cuid())
   promptId     String
   name         String
   kind         String
-  versionCount Int    @default(1)
-  prompt       Prompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+  versionCount Int                 @default(1)
+  prompt       Prompt              @relation(fields: [promptId], references: [id], onDelete: Cascade)
   versions     PromptFileVersion[]
-  createdAt    DateTime @default(now())
+  createdAt    DateTime            @default(now())
 
   @@index([promptId, createdAt])
 }
 
 model PromptFileVersion {
-  id              String @id @default(cuid())
+  id              String              @id @default(cuid())
   fileId          String
   version         Int
   content         Bytes
@@ -293,15 +298,103 @@ model PromptFileVersion {
   mimeType        String
   size            Int
   sourceVersionId String?
-  instruction     String @default("")
-  summary         String @default("")
+  instruction     String              @default("")
+  summary         String              @default("")
   model           String?
   authorId        String?
-  createdAt       DateTime @default(now())
-  file            PromptFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
-  source          PromptFileVersion? @relation("FileRevisionSource", fields: [sourceVersionId], references: [id], onDelete: SetNull)
+  createdAt       DateTime            @default(now())
+  file            PromptFile          @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  source          PromptFileVersion?  @relation("FileRevisionSource", fields: [sourceVersionId], references: [id], onDelete: SetNull)
   revisions       PromptFileVersion[] @relation("FileRevisionSource")
 
   @@unique([fileId, version])
   @@index([sourceVersionId])
+}
+
+// ---------------------------------------------------------------------------
+// Agent runs
+//
+// The other half of the product from CodeCommit. There, a prompt is sent to a
+// model and the files it returns become a commit. Here, an agent has already
+// edited files on someone's disk, and the record is built from the filesystem:
+// a baseline taken before the run, compared against the real tree afterwards.
+// The agent's own account of what it changed is kept as `response`, beside the
+// diff that says what actually happened.
+// ---------------------------------------------------------------------------
+
+enum AgentFileChange {
+  ADDED
+  MODIFIED
+  REMOVED
+}
+
+model AgentRun {
+  id          String  @id @default(cuid())
+  workspaceId String
+  authorId    String?
+  // Per-workspace counter, not per-category, so "r7" stays one run no matter
+  // which container it is read from and a reference never becomes ambiguous.
+  sequence    Int
+
+  // The snapshot category this run was measured against: the name as the
+  // developer typed it, plus the slug that actually groups and filters. Both
+  // default to empty for runs pushed before categories existed.
+  category     String    @default("")
+  categorySlug String    @default("")
+  // When that baseline was taken. Null when the CLI did not report it.
+  baselineAt   DateTime?
+
+  // Which agent did the work, and where. Free text: the CLI reports what it
+  // was told, and this project does not define the set of agents.
+  agent      String @default("")
+  root       String @default("")
+  prompt     String @default("")
+  response   String @default("")
+  // The agent's tool events as the JSON text it reported, stored verbatim
+  // because their shape belongs to whichever agent produced them.
+  toolEvents String @default("[]")
+
+  // The restore handshake. A web page cannot write to someone's working
+  // directory, so undoing a run is two steps with the operator in the middle:
+  // the website stamps a request here, and `pops restore` on the machine that
+  // owns the files picks it up, applies it, and stamps `restoredAt`. None of
+  // this edits the run — the log still says what the agent did after an undo.
+  restoreRequestedAt   DateTime?
+  restoreRequestedById String?
+  restoredAt           DateTime?
+
+  workspace          Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  author             User?          @relation("AgentRunAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  restoreRequestedBy User?          @relation("AgentRunRestorer", fields: [restoreRequestedById], references: [id], onDelete: SetNull)
+  files              AgentRunFile[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([workspaceId, sequence])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, categorySlug, createdAt])
+  @@index([authorId])
+  @@index([restoreRequestedById])
+}
+
+// One file the run touched, with both sides of it. There is no UNCHANGED:
+// a run records changes, and a file nobody touched is not part of the record.
+// `before` is what a restore writes back to disk, which is why it is stored
+// rather than derived.
+model AgentRunFile {
+  id         String          @id @default(cuid())
+  runId      String
+  path       String
+  before     String
+  after      String
+  beforeHash String
+  afterHash  String
+  language   String          @default("")
+  change     AgentFileChange
+  added      Int             @default(0)
+  removed    Int             @default(0)
+
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, path])
 }
