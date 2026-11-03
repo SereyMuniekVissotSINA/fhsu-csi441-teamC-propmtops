@@ -106,43 +106,39 @@ For local testing through a 9Router instance, set these in `.env`:
 
 ```env
 LLM_BASE_URL="http://localhost:20128/v1"
-LLM_MODEL="openrouter/stepfun/step-3.5-flash:free"
+LLM_MODEL="openrouter/nvidia/nemotron-3-super-120b-a12b:free"
 LLM_API_KEY="your-9router-api-key"
 ```
 
-Use the key 9Router generates for you, and keep your actual upstream
-OpenRouter key tucked away inside 9Router itself. Model IDs come straight
-from 9Router's `/v1/models` list. Restart `bun run dev`, sign in, open a
-prompt from `/dashboard`, fill in its variables, and click **Run test**. One
-thing to know: `LLM_BASE_URL` routes through
-Chat Completions with a 4,096-token output cap, and it only works for things
-your own machine can reach — a cloud-hosted deployment can't dial back into
-your laptop. Unset it if you want to go straight to OpenAI instead.
+Use the key 9Router issues you, and keep your actual upstream OpenRouter key
+tucked away inside 9Router itself — never in `.env`. `LLM_MODEL` has to be an
+id from 9Router's own `/v1/models` list; ask the running server what it has:
 
-Speaking of which: grab an API project/key from
-https://platform.openai.com/api-keys, make sure billing's set up for that
-project, then add `OPENAI_API_KEY` and `OPENAI_MODEL` (any model your project
-can access via the Responses API) to `.env` and restart the dev server. Keep
-that key server-side and far away from version control.
+```bash
+curl -s -H "Authorization: Bearer $LLM_API_KEY" "$LLM_BASE_URL/models" \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>JSON.parse(s).data.forEach(m=>console.log(m.id)))'
+```
 
-With PostgreSQL wired up and migrations applied, sign in as a workspace
-owner or editor, open a prompt in `/dashboard`, fill in its variables, and
-click **Run with OpenAI**. It sends your current draft — unsaved edits and
-all — and shows you the response, the model, how long it took, and the token
-usage. Text-only results are a scratchpad and are not saved. Selecting an
-attached file saves a separate revised file version (see below).
+Then restart `bun run dev`, sign in, open a prompt from `/dashboard`, fill in
+its variables, and click **Run test**. It sends your current draft — unsaved
+edits and all — and shows the response, the model, how long it took, and the
+token usage. Text-only results are a scratchpad and are not saved; selecting
+an attached file saves a separate revised file version (see below).
 
-AI testing is enabled in development. The authenticated editor can also run
-in production when `AI_TESTING_ENABLED=true`. Text-only direct OpenAI requests are capped at 16,000 input
-characters, 1,024 output tokens, and 60
-seconds, with no automatic retries, so a bad prompt can't quietly burn
-through your budget (though the caps don't add up to a hard spending limit
-overall, so still keep an eye on your bill). Want to sanity-check the
-plumbing without spending a cent? Run
+All three `LLM_*` variables are needed together, and the server has to be
+something your own machine can reach — a cloud-hosted deployment cannot dial
+back into your laptop. The request goes through Chat Completions with a
+4,096-token output cap.
+
+AI testing is enabled in development, and in production only when
+`AI_TESTING_ENABLED=true`. Every request is capped at 16,000 input characters,
+1,024 output tokens, and 60 seconds, with no automatic retries, so a bad
+prompt can't quietly burn through your quota — though those caps are per
+request, not a spending limit, so keep an eye on usage. To sanity-check the
+plumbing without spending anything, run
 `node --import tsx --test src/lib/openai-run.test.ts` — it's all mocked.
 
-Persistent token analytics are available per prompt (see below). The MCP server
-is still pending; deployment/hosting is configured by whoever ships this.
+And deployment/hosting is left as an exercise for whoever ships this.
 
 ## Generating code — and keeping every version of it
 
@@ -227,25 +223,49 @@ bun run pops help                    # or `bun link` once, then just `pops`
 
 ### Signing in
 
-The CLI authenticates with a **workspace API key**, not your password. Create
-one in the web app (workspace settings → API keys; owners only), then:
+Day to day the CLI authenticates with a **workspace API key**. From a cold
+start you have no key, so sign in with your password once and mint one:
 
 ```bash
-bun run pops auth login --key pops_…       # stored in ~/.config/promptops/config.json, mode 600
+bun run pops auth login --email owner@example.com   # prompts for the password, no echo
+bun run pops keys create --name "my laptop" --save  # prints the key once, stores it
 bun run pops whoami
 ```
 
+Both credentials live in `~/.config/promptops/config.json`, mode 600. If you
+already hold a key, `pops auth login --key pops_…` stores it without a
+password.
+
 `POPS_API_KEY` and `POPS_URL` override the stored values, which is what you
 want in CI or when pointing at another instance. `--key` and `--url` override
-both for a single command.
+both for a single command. `POPS_PASSWORD` and `--password` skip the password
+prompt for scripts — prefer the prompt, so the password stays out of your shell
+history and out of `ps`.
 
 A key is deliberately weaker than the person who made it: it reaches **one**
 workspace and acts as an `EDITOR` there. It can read and write prompts and
 generate code; it cannot add members, mint more keys, or create a workspace —
-those still require a browser session. Revoking a key in the web app takes
-effect on the next request. Writes made with a key are attributed to whoever
-created it, which is why a key minted before that was recorded can read but
-cannot create a prompt.
+those still require a browser session. That is why `pops keys` is the one group
+of commands that uses the session cookie rather than the key: a key that could
+mint a key would be an escalation path, so the CLI signs in as a person
+instead, through Auth.js's own endpoints. Writes made with a key are attributed
+to whoever created it, which is why a key minted before that was recorded can
+read but cannot create a prompt.
+
+### Managing keys
+
+Owners only, and only after `auth login --email`.
+
+```bash
+pops keys                                # prefix, name, created, last used, status
+pops keys create --name "ci" --save      # shown once; only its hash is stored
+pops keys revoke ci                      # by name, prefix, or id
+```
+
+A key is revoked, never deleted, so the listing stays an audit of what was
+issued; revocation takes effect on the next request. The key this CLI is
+holding is marked `*` in the listing, so you can see before you revoke it that
+you are about to log your own terminal out.
 
 ### The workflow
 
@@ -273,97 +293,6 @@ jq` works. Colour follows `NO_COLOR` and switches off when output is piped.
 
 `run` and `generate` reach a model, so they need the app in development mode
 with a provider configured — the same restriction the browser has.
-
-## File uploads and AI revisions
-
-### Prompt history and comparison
-
-In the authenticated prompt editor, **Load vN** restores that saved prompt's
-title, body, and tags without overwriting history. Loading another version
-asks before replacing unsaved edits. You can load the latest version too.
-After **Save as new version** succeeds, the body and commit note clear for a
-new entry; title and tags remain. Failed saves keep the draft intact.
-
-Use **Compare with latest** (or **Compare with previous** on the latest entry)
-to compare any two saved prompt versions. The comparison shows title/tag
-changes and red removed / green added content lines. For very large inputs,
-it shows complete old/new content instead of computing detailed line matches.
-This compares prompt snapshots, not attached file versions or unsaved drafts.
-
-Owners and editors can click **Analyze changes with AI** when server AI testing
-is enabled. Both saved snapshots are sent to the configured provider only on
-that click; usage limits and charges apply. AI analysis is an interpretation,
-does not execute either prompt, is not saved, and does not create a version.
-Analysis is limited to 32,000 serialized snapshot characters and 4,096 output
-tokens, with incomplete output clearly marked. Viewers can compare locally
-but cannot request AI analysis. Run `bun run test:history` for the regression
-tests; provider calls are mocked.
-
-### Attached files
-
-This feature is available in the authenticated `/dashboard`. Apply the new
-tables before opening the dashboard:
-
-```bash
-bunx --bun prisma migrate deploy
-bun run dev
-```
-
-Owners and editors can attach files while creating a prompt or upload more
-from its editor. Under **Files & versions**, select a file version, write the
-requested changes in the prompt, fill any variables, and click **Run AI &
-save revised file**. The AI receives the selected file's extracted content
-and the current prompt draft. A successful response creates a downloadable
-v2, v3, etc.; v1 remains the exact original upload. Any earlier version can
-be selected as the source for another revision. History records that source,
-the instruction, model, and summary. Viewers may preview and download files
-but cannot upload or run revisions.
-
-For files with two or more versions, click **Compare with vN** (or **Compare
-with latest/previous**) beside a file version. A comparison opens in the main
-panel; use its selectors to compare any two versions of that same file. Removed
-lines are red and added lines are green. **View both file contents** shows
-syntax-colored previews and download links. This is separate from prompt History.
-PDF/Word comparisons cover extracted text; Excel comparisons cover stored cell
-values displayed as readable JSON, not formulas, layouts, images, or formatting.
-
-Editors/owners can optionally click **Analyze file changes with AI**. Only then
-are both saved file contents sent to the configured provider. The action checks
-workspace access and that both versions belong to the same file and prompt.
-Analysis is limited to 64,000 serialized snapshot characters and 4,096 output
-tokens; partial output is marked. Analysis never executes code, modifies files,
-or creates a new version. Viewers can use the comparison without AI.
-
-Supported files and limits:
-
-- UTF-8 code/text files, text-based `.pdf`, `.docx`, and `.xlsx`. Legacy
-  `.doc`/`.xls`, macros, embedded attachments, encrypted documents, and scanned
-  PDFs requiring OCR are not supported.
-- Up to three files per upload, 2 MB combined, and 24,000 extracted characters
-  per file. One selected file is revised per AI run.
-- PDFs: up to 50 pages. PDF/Word output is rebuilt from text; complex layout,
-  images, and rich formatting are not preserved.
-- Excel: up to 10 sheets, 1,000 rows and 100 columns per sheet. Output contains
-  literal cell values; formulas become displayed/cached values, and formatting,
-  charts, macros, and external connections are not retained.
-- Office archives are bounded to 10 MB uncompressed and 1,000 entries.
-
-Files and revisions are stored in PostgreSQL and scoped to the prompt's
-workspace. Deleting the prompt or workspace also deletes its attached files.
-Uploads are not sent to the AI until a revision or AI analysis is requested. Do not upload secrets
-or content you are not allowed to share with the configured provider.
-File runs allow up to 16,384 output tokens, so they may cost more than text-only
-tests. Invalid, truncated, or failed responses do not create a revision.
-Generated code is never executed or automatically tested; review all output.
-
-Configure `LLM_BASE_URL`/`LLM_MODEL` (optional `LLM_API_KEY`) or
-`OPENAI_API_KEY`/`OPENAI_MODEL` as described above. For `bun run start`, set
-`AI_TESTING_ENABLED=true` before running the server to enable authenticated AI
-testing. Without it, uploaded files and history still work.
-
-Run `bun run test:files` for document round trips, original-byte preservation,
-upload validation, and mocked AI success/failure tests. These tests do not call
-a paid provider.
 
 ### Token usage and observed savings (report UC-7 / UC-8)
 
@@ -481,9 +410,6 @@ permission. It never resets or seeds the application's tables or calls an LLM.
 | `bun run typecheck` | `tsc --noEmit` |
 | `bun run test` | Pure-logic suites (`node:test`) |
 | `bun run smoke:test` | End-to-end checks against a running app |
-| `bun run test:files` | File upload/revision and mocked provider tests |
-| `bun run test:usage` | Usage validation, normalization, and savings calculations |
-| `bun run test:usage:db` | Opt-in isolated PostgreSQL integration tests |
 | `bun run db:migrate` | Create + apply a migration |
 | `bun run db:push` | Push schema without a migration |
 | `bun run db:seed` | Run `prisma/seed.ts` |
@@ -512,12 +438,15 @@ src/
     providers/         SessionProvider + QueryClientProvider
     ui/                shadcn components
   generated/prisma/    Prisma client output (gitignored)
+  mcp/
+    index.ts           `prompt-ops` MCP server for Copilot Chat (stdio)
   cli/
     index.ts           `pops` — commands and help
-    client.ts          HTTP layer, bearer key, error mapping
+    client.ts          HTTP layer, bearer key or session cookie, error mapping
     config.ts          ~/.config/promptops/config.json
+    session.ts         Password sign-in through Auth.js, for the owner-only routes
     format.ts          Tables, diffs, colour
-    resolve.ts         Name a prompt by id, prefix, or title
+    resolve.ts         Name a prompt by id, prefix, or title — or a key
   lib/
     api-auth.ts        Session or API key: one caller model for every route
     prompts-core.ts    Pure prompt helpers + sample data, shared by app/CLI/seed
@@ -551,41 +480,69 @@ Tailwind IntelliSense, Prisma, Bun, Copilot Chat) ready to go. Accept the
 prompt on first open, or run **Extensions: Show Recommended Extensions** if
 you missed it.
 
-## GitHub Copilot Chat (wired up, not working yet)
+## GitHub Copilot Chat — the MCP server
 
-The goal: manage prompts from Copilot Chat's agent mode — list them, read one,
-append a version — without leaving the editor.
+Manage prompts from Copilot Chat's agent mode: list them, read one, save a new
+one, append a version, fill in variables — without leaving the editor.
 
-`.vscode/mcp.json` registers a `prompt-ops` MCP server for exactly that. **It
-does not work yet**, because the server it points at (`src/mcp/index.ts`)
-hasn't been written. Copilot will list the server and report that it failed to
-start. The config is committed first so the wiring is settled and reviewable
-before the server lands.
+`.vscode/mcp.json` registers a `prompt-ops` server; `src/mcp/index.ts` is it.
 
-What's already decided by that file:
+```bash
+bun run mcp        # stdio on stdin/stdout — only useful to an MCP client
+```
 
-- **Transport is stdio**, launched as `bun src/mcp/index.ts` — the same shape
-  as the `pops` CLI in `package.json`.
-- **Credentials come from the environment**, using the names the CLI already
-  reads in `src/cli/config.ts`: `POPS_URL` and `POPS_API_KEY`. Environment
-  variables win over the stored config file there, so the same precedence
-  applies here.
-- **The key is never committed.** VS Code prompts for it once via the
-  `pops-api-key` input and keeps it in its own secret storage. Delete that
-  input and the `POPS_API_KEY` entry if you'd rather have the server fall back
-  to whatever `pops login` wrote to `~/.config/promptops/config.json` — that
-  file is owner-only on purpose, and the key never belongs in `.env`.
+### Using it from VS Code
 
-To finish this, the server needs to exist and expose a few tools
-(`list_prompts`, `get_prompt`, `append_version`, `compose`) over the
-`requireCaller*` helpers in `src/lib/api-auth.ts`, authenticating with a
-workspace API key. `composePrompt` and `variableNames` in
-`src/lib/prompts-core.ts` are pure and browser-independent, so variable
-substitution can be reused as-is.
+1. Start the app: `bun run dev`. The server is a client of the HTTP API, so
+   nothing works without it running.
+2. Have a key: `pops auth login --email you@…` then `pops keys create --save`.
+3. Open the Command Palette → **MCP: List Servers** → `prompt-ops` → **Start**.
+   VS Code asks for the key once (the `pops-api-key` input) and keeps it in its
+   own secret storage.
+4. In Copilot Chat, switch to **Agent** mode and check the tools picker for the
+   five `prompt-ops` tools.
 
-Both of those live on `feat/code-commits-and-cli`, which hasn't been merged —
-on `main` the prompt routes still trust browser sessions only, so there is no
-bearer-key path for an MCP server to call.
+### The tools
+
+| Tool | What it does |
+| --- | --- |
+| `list_prompts` | id, title, version count, workspace. `workspace` narrows it |
+| `get_prompt` | current body, tags, `{{variables}}`, and the version history |
+| `create_prompt` | saves a new prompt, so one refined in the editor is kept |
+| `append_version` | appends a version; omitted fields carry forward |
+| `compose` | fills `{{variables}}` and returns the text — stores nothing |
+
+A prompt is named the way the CLI names one: id, a 6-or-more character id
+prefix, or part of its title. Ambiguity is an error listing the candidates,
+never a guess — an agent that picked one at random would append a version to
+the wrong prompt, and that cannot be undone.
+
+### What it deliberately does not expose
+
+- **`run` and `generate`.** They reach a model, cost money, and are
+  development-only by design. The caller is already an agent with its own
+  model.
+- **Members, keys, and deleting a prompt.** A workspace key is an `EDITOR` and
+  cannot do the first two; deletion is the one irreversible operation in the
+  product and is not something an agent should reach for on its own.
+
+### How it is built
+
+- **It is a client of the web app, not a second way into the database.** Every
+  tool goes out over the same HTTP API the dashboard and CLI use, so workspace
+  scoping, the append-only rules and authorship stay where they are enforced.
+  A Prisma client here would duplicate the rules and would need database
+  credentials in an editor's environment — exactly what the API key avoids.
+- **Credentials come from the environment**, using the names the CLI reads in
+  `src/cli/config.ts`: `POPS_URL` and `POPS_API_KEY`. It reuses
+  `src/cli/client.ts`, so if `pops whoami` works, so does this — and with no
+  environment at all it falls back to `~/.config/promptops/config.json`. The
+  key never belongs in `.env`.
+- **stdout is the JSON-RPC channel.** Diagnostics go to stderr; a stray
+  `console.log` would corrupt the stream and the client would report a
+  protocol error.
+- **A failed call returns `isError` with the server's own message**, so the
+  agent can relay "API key has been revoked." instead of "the tool broke".
 
 ## Push notifications (because who checks GitHub notifications)
 

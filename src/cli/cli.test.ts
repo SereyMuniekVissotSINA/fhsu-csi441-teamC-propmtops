@@ -3,7 +3,8 @@ import test from "node:test";
 
 import { maskKey, stripTrailingSlash } from "./config";
 import { changeCount, changeLetter, table, truncate } from "./format";
-import { matchPrompt, parseRange, parseRef, parseVariables } from "./resolve";
+import { matchKey, matchPrompt, parseRange, parseRef, parseVariables } from "./resolve";
+import { absorb, cookieHeader, hasSessionCookie, type Jar } from "./session";
 
 const prompts = [
   { id: "cmv9v5hgw0005vnj597ysm0x9", title: "Slugify helper" },
@@ -111,4 +112,50 @@ test("long titles are shortened with an ellipsis, short ones left alone", () => 
   assert.equal(truncate("short", 10), "short");
   assert.equal(truncate("a".repeat(20), 10), `${"a".repeat(9)}…`);
   assert.equal(truncate("wraps\n  across   lines", 40), "wraps across lines");
+});
+
+const keys = [
+  { id: "key_one", name: "laptop", prefix: "pops_a1b2c3", revokedAt: null },
+  { id: "key_two", name: "ci", prefix: "pops_d4e5f6", revokedAt: null },
+  { id: "key_three", name: "laptop", prefix: "pops_g7h8i9", revokedAt: "2026-10-01T00:00:00.000Z" },
+];
+
+test("a key can be named by id, prefix, or name, with or without pops_", () => {
+  assert.equal(matchKey(keys, "key_two").kind, "one");
+
+  const byPrefix = matchKey(keys, "pops_a1b2c3");
+  assert.equal(byPrefix.kind === "one" && byPrefix.value.name, "laptop");
+
+  // The listing abbreviates, so the bare prefix has to work too.
+  const bare = matchKey(keys, "d4e5f6");
+  assert.equal(bare.kind === "one" && bare.value.id, "key_two");
+
+  assert.equal(matchKey(keys, "ci").kind, "one");
+  // Two keys are called "laptop": revoking one of them is not a guess to make.
+  assert.equal(matchKey(keys, "laptop").kind, "many");
+  assert.equal(matchKey(keys, "nothing").kind, "none");
+  assert.equal(matchKey(keys, "  ").kind, "none");
+});
+
+test("the cookie jar keeps values, drops attributes, and honours clearing", () => {
+  const jar: Jar = new Map();
+  absorb(jar, [
+    "authjs.csrf-token=abc%7Cdef; Path=/; HttpOnly; SameSite=Lax",
+    "authjs.callback-url=http%3A%2F%2Flocalhost%3A3000; Path=/",
+  ]);
+  assert.equal(hasSessionCookie(jar), false);
+
+  absorb(jar, ["authjs.session-token=jwt.one.two; Path=/; HttpOnly"]);
+  assert.equal(hasSessionCookie(jar), true);
+  assert.equal(cookieHeader(jar).includes("authjs.session-token=jwt.one.two"), true);
+  assert.equal(cookieHeader(jar).includes("HttpOnly"), false);
+
+  // Auth.js clears a cookie by setting it empty; that must not read as a session.
+  absorb(jar, ["authjs.session-token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT"]);
+  assert.equal(hasSessionCookie(jar), false);
+});
+
+test("a chunked or secure session cookie still counts as a session", () => {
+  const chunked: Jar = absorb(new Map(), ["__Secure-authjs.session-token.0=head"]);
+  assert.equal(hasSessionCookie(chunked), true);
 });

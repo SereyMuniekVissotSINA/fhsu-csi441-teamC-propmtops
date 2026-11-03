@@ -6,8 +6,6 @@ import { redirect } from "next/navigation";
 import { signOut } from "@/auth";
 import { AuthzError, requireMember, requireSession } from "@/lib/authz";
 import { prisma } from "@/lib/prisma";
-import { prepareUploads } from "@/lib/file-codecs";
-import { FileInputError } from "@/lib/file-policy";
 import {
   createPromptSchema,
   createWorkspaceSchema,
@@ -21,7 +19,6 @@ export async function signOutAction() {
 }
 
 function messageOf(error: unknown) {
-  if (error instanceof FileInputError) return error.message;
   if (error instanceof AuthzError) return error.message;
   console.error(error);
   return "Something went wrong. Please try again.";
@@ -75,14 +72,12 @@ export async function createPromptAction(
   try {
     const { workspaceId, title, body, tags } = parsed.data;
     const { session } = await requireMember(workspaceId, "EDITOR");
-    const files = await prepareUploads(formData, session.user.id);
 
     const prompt = await prisma.prompt.create({
       data: {
         workspaceId,
         authorId: session.user.id,
         title,
-        files: { create: files },
         versions: {
           create: { title, body, tags, note: "Initial version", authorId: session.user.id },
         },
@@ -182,6 +177,138 @@ export async function deletePromptAction(
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/explorer");
   redirect(`/dashboard?workspace=${slug}`);
+}
+
+/**
+ * Ask for an agent run to be undone, or withdraw that request.
+ *
+ * Deliberately not an undo. Nothing in the browser can write to a developer's
+ * working directory, and nothing in this project should be able to reach into
+ * one on its own, so this only stamps the request on the run; `pops restore`
+ * running on the machine that holds the files is what rewrites anything, and it
+ * reports back through `POST /api/runs/[id]/restore`.
+ *
+ * The run itself is never edited — the log still says what the agent did after
+ * the change has been undone.
+ *
+ * EDITOR is the bar, matching that route: asking for an undo is a write to the
+ * project, so a viewer can read the diff and nothing more.
+ */
+export async function requestRestoreAction(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = String(formData.get("id") ?? "");
+  const cancel = formData.get("cancel") === "1";
+
+  try {
+    // Session first, as in `deletePromptAction`: looking the run up before
+    // authenticating would answer "does this id exist?" for anyone.
+    const session = await requireSession();
+
+    const run = await prisma.agentRun.findUnique({
+      where: { id },
+      select: { workspaceId: true },
+    });
+    if (!run) throw new AuthzError(404, "Run not found.");
+
+    await requireMember(run.workspaceId, "EDITOR");
+
+    await prisma.agentRun.update({
+      where: { id },
+      data: cancel
+        ? { restoreRequestedAt: null, restoreRequestedById: null }
+        : {
+            restoreRequestedAt: new Date(),
+            restoreRequestedById: session.user.id,
+            // Asking again after an undo was already applied is a fresh
+            // request, not a stale one, so the old stamp is cleared.
+            restoredAt: null,
+          },
+    });
+  } catch (error) {
+    return { error: messageOf(error) };
+  }
+
+  revalidatePath(`/dashboard/runs/${id}`);
+  revalidatePath("/dashboard/runs");
+  return {};
+}
+
+/**
+ * Retire a snapshot, or bring it back.
+ *
+ * A snapshot with runs under it cannot be deleted — those runs are the record
+ * of what an agent changed — so archiving is how a finished branch leaves the
+ * pickers and the chips with its history intact. `onDelete: Restrict` in the
+ * schema is the backstop; this is the way out that does not need one.
+ */
+export async function archiveSnapshotAction(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = String(formData.get("id") ?? "");
+  const unarchive = formData.get("unarchive") === "1";
+
+  try {
+    await requireSession();
+    const snapshot = await prisma.snapshot.findUnique({
+      where: { id },
+      select: { workspaceId: true },
+    });
+    if (!snapshot) throw new AuthzError(404, "Snapshot not found.");
+
+    await requireMember(snapshot.workspaceId, "EDITOR");
+    await prisma.snapshot.update({
+      where: { id },
+      data: { archivedAt: unarchive ? null : new Date() },
+    });
+  } catch (error) {
+    return { error: messageOf(error) };
+  }
+
+  revalidatePath("/dashboard/runs");
+  return {};
+}
+
+/**
+ * Delete a snapshot that nothing is filed under.
+ *
+ * The count is checked here as well as by the foreign key, so a branch with
+ * runs gets a sentence rather than a constraint violation. A branch with runs
+ * is archived instead — see above.
+ */
+export async function deleteSnapshotAction(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = String(formData.get("id") ?? "");
+
+  try {
+    await requireSession();
+    const snapshot = await prisma.snapshot.findUnique({
+      where: { id },
+      select: { workspaceId: true, _count: { select: { runs: true } } },
+    });
+    if (!snapshot) throw new AuthzError(404, "Snapshot not found.");
+
+    await requireMember(snapshot.workspaceId, "EDITOR");
+    if (snapshot._count.runs > 0) {
+      throw new AuthzError(
+        409,
+        `This snapshot has ${snapshot._count.runs} run${
+          snapshot._count.runs === 1 ? "" : "s"
+        } filed under it. Archive it instead.`,
+      );
+    }
+
+    await prisma.snapshot.delete({ where: { id } });
+  } catch (error) {
+    return { error: messageOf(error) };
+  }
+
+  revalidatePath("/dashboard/runs");
+  return {};
 }
 
 async function uniqueSlug(name: string): Promise<string> {

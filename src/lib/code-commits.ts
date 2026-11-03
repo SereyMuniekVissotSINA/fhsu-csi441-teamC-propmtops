@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { lineStats, splitLines } from "@/lib/code-diff";
+import { languageForPath, normalizePath } from "@/lib/paths";
 
 // Turning a model response into a commit.
 //
@@ -56,41 +57,12 @@ export function fileHash(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex").slice(0, 12);
 }
 
-/**
- * Make a model-supplied path safe to store and display: relative, no traversal,
- * no absolute roots. Returns null when nothing usable is left.
- *
- * Nothing in Prompt_Ops writes these files to disk, but a path that escapes the
- * project root is still a path that must never be presented as if it belonged
- * to the project.
- */
-export function normalizePath(raw: string): string | null {
-  const cleaned = raw
-    .trim()
-    .replace(/^[`'"<(\[{*]+|[`'">)\]},:*]+$/g, "")
-    .trim()
-    .replace(/\\/g, "/")
-    .replace(/\/{2,}/g, "/")
-    .replace(/^\.\//, "")
-    .replace(/^\/+/, "");
-
-  if (!cleaned || cleaned.length > 200) return null;
-
-  const segments = cleaned.split("/").filter((segment) => segment && segment !== ".");
-  if (segments.length === 0 || segments.some((segment) => segment === "..")) return null;
-  if (segments.some((segment) => /[\0\n\r]/.test(segment))) return null;
-
-  return segments.join("/");
-}
-
-const languageByExtension: Record<string, string> = {
-  ts: "ts", tsx: "tsx", js: "js", jsx: "jsx", mjs: "js", cjs: "js",
-  json: "json", prisma: "prisma", sql: "sql", css: "css", scss: "scss",
-  html: "html", md: "md", mdx: "mdx", py: "python", rb: "ruby", go: "go",
-  rs: "rust", java: "java", kt: "kotlin", swift: "swift", php: "php",
-  c: "c", h: "c", cpp: "cpp", cs: "csharp", sh: "bash", bash: "bash",
-  yml: "yaml", yaml: "yaml", toml: "toml", env: "dotenv", txt: "text",
-};
+// The path rule and the syntax labels live in `@/lib/paths`, which imports
+// nothing: the agent-run classifier needs the same two and cannot import this
+// module, because this one reaches for node:crypto and that one is bundled for
+// the browser. They are re-exported here so the callers that have always had
+// them from this module keep working.
+export { normalizePath, languageForPath } from "@/lib/paths";
 
 const extensionByLanguage: Record<string, string> = {
   typescript: "ts", ts: "ts", tsx: "tsx", javascript: "js", js: "js",
@@ -101,9 +73,7 @@ const extensionByLanguage: Record<string, string> = {
 };
 
 function languageOf(path: string, fenceLanguage: string): string {
-  if (fenceLanguage) return fenceLanguage.toLowerCase();
-  const extension = path.includes(".") ? path.split(".").pop()!.toLowerCase() : "";
-  return languageByExtension[extension] ?? "";
+  return fenceLanguage ? fenceLanguage.toLowerCase() : languageForPath(path);
 }
 
 /** A token is path-shaped if it has a directory separator or a file extension. */

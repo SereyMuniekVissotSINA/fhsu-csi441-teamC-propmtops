@@ -31,6 +31,12 @@ export async function isDatabaseReady(): Promise<boolean> {
       prisma.codeFile.findFirst({ select: { id: true } }),
       prisma.promptFile.findFirst({ select: { id: true } }),
       prisma.promptFileVersion.findFirst({ select: { id: true } }),
+      // And the agent-run tables, which /dashboard/runs reads, plus the
+      // snapshots those runs are filed under.
+      prisma.snapshot.findFirst({ select: { id: true } }),
+      prisma.agentRun.findFirst({ select: { id: true } }),
+      prisma.agentRunFile.findFirst({ select: { id: true } }),
+      prisma.usageRecord.findFirst({ select: { id: true } }),
     ]);
     ready = true;
   } catch {
