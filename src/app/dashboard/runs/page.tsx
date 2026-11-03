@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { UNCATEGORISED, describeRun, runStats } from "@/lib/agent-runs";
-import { requireSessionPage } from "@/lib/authz";
+import { UNFILED, describeRun, runStats } from "@/lib/agent-runs";
+import { canEdit, requireSessionPage } from "@/lib/authz";
 import { prisma } from "@/lib/prisma";
 import { action, panel } from "@/lib/ui";
+
+import { SnapshotControls } from "./snapshot-controls";
 
 export const metadata: Metadata = {
   title: "Agent runs | PromptOps",
@@ -22,6 +24,8 @@ type RunRow = {
   sequence: number;
   category: string;
   categorySlug: string;
+  snapshotId: string | null;
+  snapshot: { id: string; name: string; slug: string; archivedAt: Date | null } | null;
   agent: string;
   prompt: string;
   createdAt: Date;
@@ -32,17 +36,39 @@ type RunRow = {
   files: { path: string; change: "ADDED" | "MODIFIED" | "REMOVED"; added: number; removed: number }[];
 };
 
+type Group = {
+  id: string | null;
+  name: string;
+  slug: string;
+  archived: boolean;
+  runs: RunRow[];
+};
+
 /**
- * Group runs into their containers, keeping the order they arrived in — newest
- * first — so the category worked on most recently leads the page.
+ * Group runs under their snapshot, keeping the order they arrived in — newest
+ * first — so the branch worked on most recently leads the page.
+ *
+ * Grouped by the relation, not by the name: two runs are the same branch
+ * because they point at the same snapshot, not because their names match. A
+ * run pushed before snapshots belonged to a workspace has none, and collects
+ * under one unfiled heading.
  */
-function byCategory(runs: RunRow[]): { name: string; slug: string; runs: RunRow[] }[] {
-  const groups = new Map<string, { name: string; slug: string; runs: RunRow[] }>();
+function bySnapshot(runs: RunRow[]): Group[] {
+  const groups = new Map<string, Group>();
   for (const run of runs) {
-    const slug = run.categorySlug || "";
-    const group = groups.get(slug);
-    if (group) group.runs.push(run);
-    else groups.set(slug, { name: run.category || UNCATEGORISED, slug, runs: [run] });
+    const key = run.snapshotId ?? "";
+    const group = groups.get(key);
+    if (group) {
+      group.runs.push(run);
+      continue;
+    }
+    groups.set(key, {
+      id: run.snapshot?.id ?? null,
+      name: run.snapshot?.name ?? run.category ?? UNFILED,
+      slug: run.snapshot?.slug ?? run.categorySlug ?? "",
+      archived: Boolean(run.snapshot?.archivedAt),
+      runs: [run],
+    });
   }
   return [...groups.values()];
 }
@@ -53,22 +79,38 @@ function stamp(value: Date): string {
 
 export default async function RunsPage({ searchParams }: PageProps<"/dashboard/runs">) {
   const session = await requireSessionPage("/dashboard/runs");
-  const { workspace: requested, category: filter } = await searchParams;
+  const {
+    workspace: requested,
+    snapshot: filter,
+    archived: showArchived,
+  } = await searchParams;
 
   const workspaces = await prisma.workspace.findMany({
     where: { members: { some: { userId: session.user.id } } },
     orderBy: { createdAt: "asc" },
-    select: { id: true, name: true, slug: true },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      members: { where: { userId: session.user.id }, select: { role: true } },
+    },
   });
 
   const active = workspaces.find((entry) => entry.slug === requested) ?? workspaces[0];
   const chosen = typeof filter === "string" ? filter : null;
+  const archived = showArchived === "1";
+  const role = active?.members[0]?.role ?? "VIEWER";
 
   const runs: RunRow[] = active
     ? await prisma.agentRun.findMany({
         where: {
           workspaceId: active.id,
-          ...(chosen ? { categorySlug: chosen } : {}),
+          // By the relation, so filtering follows the branch rather than a
+          // name two branches could share across workspaces.
+          ...(chosen ? { snapshot: { slug: chosen } } : {}),
+          // Archived branches are out of the way unless asked for, the same
+          // rule the snapshots API applies.
+          ...(archived || chosen ? {} : { OR: [{ snapshotId: null }, { snapshot: { archivedAt: null } }] }),
         },
         orderBy: { sequence: "desc" },
         take: 100,
@@ -77,6 +119,8 @@ export default async function RunsPage({ searchParams }: PageProps<"/dashboard/r
           sequence: true,
           category: true,
           categorySlug: true,
+          snapshotId: true,
+          snapshot: { select: { id: true, name: true, slug: true, archivedAt: true } },
           agent: true,
           prompt: true,
           createdAt: true,
@@ -92,18 +136,25 @@ export default async function RunsPage({ searchParams }: PageProps<"/dashboard/r
       })
     : [];
 
-  // The filter chips list every container in the workspace, not just the ones
-  // on this page, so filtering down to one never hides where to go back to.
-  const allCategories = active
-    ? await prisma.agentRun.groupBy({
-        by: ["categorySlug", "category"],
-        where: { workspaceId: active.id },
-        _count: { _all: true },
-        orderBy: { _count: { id: "desc" } },
+  // Every branch in the workspace, not just the ones with runs on this page,
+  // so filtering down to one never hides where to go back to — and so a branch
+  // baselined but never pushed to is still visible as somewhere runs will land.
+  const branches = active
+    ? await prisma.snapshot.findMany({
+        where: { workspaceId: active.id, ...(archived ? {} : { archivedAt: null }) },
+        orderBy: [{ baselinedAt: "desc" }, { createdAt: "desc" }],
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          baselinedAt: true,
+          archivedAt: true,
+          _count: { select: { runs: true } },
+        },
       })
     : [];
 
-  const groups = byCategory(runs);
+  const groups = bySnapshot(runs);
   const base = `/dashboard/runs?workspace=${active?.slug ?? ""}`;
 
   return (
@@ -136,44 +187,75 @@ export default async function RunsPage({ searchParams }: PageProps<"/dashboard/r
         ) : null}
       </header>
 
-      {allCategories.length > 1 || chosen ? (
-        <nav className="mb-6 flex flex-wrap items-center gap-2">
-          <Link
-            href={base}
-            className={`rounded-lg border px-3 py-1.5 text-xs transition ${
-              chosen
-                ? "border-zinc-800 text-zinc-400 hover:border-zinc-700"
-                : "border-emerald-500 text-emerald-400"
-            }`}
-          >
-            All runs
-          </Link>
-          {allCategories.map((entry) => (
+      {branches.length > 0 ? (
+        <section className={`${panel} mb-6`}>
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-3">
+            <h2 className="text-sm font-medium tracking-wide text-zinc-400 uppercase">
+              Snapshots in {active?.name}
+            </h2>
             <Link
-              key={entry.categorySlug}
-              href={`${base}&category=${encodeURIComponent(entry.categorySlug)}`}
-              className={`rounded-lg border px-3 py-1.5 text-xs transition ${
-                chosen === entry.categorySlug
-                  ? "border-emerald-500 text-emerald-400"
-                  : "border-zinc-800 text-zinc-400 hover:border-zinc-700"
-              }`}
+              href={archived ? base : `${base}&archived=1`}
+              className="text-xs text-emerald-400 hover:text-emerald-300"
             >
-              {entry.category || UNCATEGORISED}
-              <span className="ml-2 text-zinc-600">{entry._count._all}</span>
+              {archived ? "hide archived" : "show archived"}
             </Link>
-          ))}
-        </nav>
+          </div>
+
+          <ul className="divide-y divide-zinc-800/70">
+            {branches.map((branch) => (
+              <li key={branch.id} className="flex flex-wrap items-center gap-3 py-2">
+                <Link
+                  href={`${base}&snapshot=${encodeURIComponent(branch.slug)}`}
+                  className={
+                    chosen === branch.slug
+                      ? "text-sm text-emerald-400"
+                      : "text-sm text-zinc-200 hover:text-white"
+                  }
+                >
+                  {branch.name}
+                </Link>
+                {branch.archivedAt ? (
+                  <span className="rounded-md border border-zinc-800 px-2 py-0.5 text-xs text-zinc-500">
+                    archived
+                  </span>
+                ) : null}
+                <span className="font-mono text-xs text-zinc-600">
+                  {branch._count.runs} run{branch._count.runs === 1 ? "" : "s"}
+                  {branch.baselinedAt ? ` · baselined ${stamp(branch.baselinedAt)}` : " · never baselined"}
+                </span>
+                {/* Viewers read the log and nothing else. The server checks
+                    again regardless; a hidden control is not a boundary. */}
+                {canEdit(role) ? (
+                  <div className="ml-auto">
+                    <SnapshotControls
+                      id={branch.id}
+                      name={branch.name}
+                      runs={branch._count.runs}
+                      archived={Boolean(branch.archivedAt)}
+                    />
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+
+          {chosen ? (
+            <Link href={base} className="mt-3 inline-block text-xs text-emerald-400 hover:text-emerald-300">
+              ← all runs in this workspace
+            </Link>
+          ) : null}
+        </section>
       ) : null}
 
       {runs.length === 0 ? (
         <div className={`${panel} text-sm text-zinc-400`}>
           {chosen ? (
-            <p>No runs in that category.</p>
+            <p>No runs under that snapshot yet.</p>
           ) : (
             <>
               <p>No runs recorded yet. From the project you want to track:</p>
               <pre className="mt-3 overflow-x-auto rounded-lg bg-black/60 p-4 font-mono text-xs text-zinc-300">
-                {`pops snapshot                      # names the snapshot, then baselines
+                {`pops snapshot                      # pick the workspace, name the branch
 # …let the agent edit files…
 pops push --prompt "what you asked for"`}
               </pre>
@@ -183,17 +265,20 @@ pops push --prompt "what you asked for"`}
       ) : (
         <div className="space-y-8">
           {groups.map((group) => (
-            <section key={group.slug || "uncategorised"}>
+            <section key={group.id ?? "unfiled"}>
               <h2 className="mb-3 flex flex-wrap items-baseline gap-3">
                 <span className="text-sm font-medium tracking-wide text-zinc-300 uppercase">
                   {group.name}
                 </span>
+                {group.archived ? (
+                  <span className="text-xs text-zinc-600">archived</span>
+                ) : null}
                 <span className="text-xs text-zinc-600">
                   {group.runs.length} run{group.runs.length === 1 ? "" : "s"}
                 </span>
                 {group.slug && !chosen ? (
                   <Link
-                    href={`${base}&category=${encodeURIComponent(group.slug)}`}
+                    href={`${base}&snapshot=${encodeURIComponent(group.slug)}`}
                     className="text-xs text-emerald-400 hover:text-emerald-300"
                   >
                     only this one

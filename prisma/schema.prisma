@@ -32,6 +32,7 @@ model User {
   codeCommits     CodeCommit[]
   apiKeys         ApiKey[]
   agentRuns       AgentRun[]      @relation("AgentRunAuthor")
+  snapshots       Snapshot[]
   // Restores this user asked for. Separate from `agentRuns` because asking for
   // an undo and having made the run are different people's actions.
   restoreRequests AgentRun[]      @relation("AgentRunRestorer")
@@ -107,6 +108,7 @@ model Workspace {
   prompts   Prompt[]
   apiKeys   ApiKey[]
   agentRuns AgentRun[]
+  snapshots Snapshot[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -328,6 +330,49 @@ enum AgentFileChange {
   REMOVED
 }
 
+// A snapshot: one line of work inside a workspace, like a branch.
+//
+// The workspace owns it, and the runs an agent produces are filed under it, so
+// "what happened on the checkout rewrite" is a relation rather than a string
+// everyone has to spell the same way. Choosing or creating a workspace
+// therefore comes first: `pops snapshot` cannot name a branch until it knows
+// which workspace the branch belongs to.
+//
+// What lives here is the record of the branch. The baseline itself — the copy
+// of the working tree a push diffs against — stays in `.pops/` on the machine
+// that took it: it is only ever compared against that same machine's files,
+// and it has no business crossing the network.
+model Snapshot {
+  id          String  @id @default(cuid())
+  workspaceId String
+  authorId    String?
+  name        String
+  // What groups and filters, and what appears in a URL. The display name is
+  // kept as typed beside it, so "Auth refactor" and "auth-refactor" are one
+  // branch rather than two.
+  slug        String
+
+  // When a baseline was last taken for it, as the CLI reported. Null until the
+  // first one: a branch can be created on the website before any machine has
+  // baselined it.
+  baselinedAt DateTime?
+  // Retired rather than deleted. A snapshot with runs cannot be deleted, so
+  // this is how a finished line of work leaves the pickers and the chips while
+  // its runs stay readable.
+  archivedAt  DateTime?
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  author    User?      @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  runs      AgentRun[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, createdAt])
+  @@index([authorId])
+}
+
 model AgentRun {
   id          String  @id @default(cuid())
   workspaceId String
@@ -336,12 +381,18 @@ model AgentRun {
   // which container it is read from and a reference never becomes ambiguous.
   sequence    Int
 
-  // The snapshot category this run was measured against: the name as the
-  // developer typed it, plus the slug that actually groups and filters. Both
-  // default to empty for runs pushed before categories existed.
+  // The snapshot this run was measured against — the branch it belongs to.
+  // Nullable only for a run pushed before snapshots became workspace-owned;
+  // every push now names one.
+  snapshotId String?
+
+  // The snapshot's name as it stood when the run was pushed, kept beside the
+  // relation the way `Prompt.title` copies its newest version: the log reads
+  // in one query, and a run still says what the work was called at the time
+  // even after the snapshot has been renamed.
   category     String    @default("")
   categorySlug String    @default("")
-  // When that baseline was taken. Null when the CLI did not report it.
+  // When the baseline was taken. Null when the CLI did not report it.
   baselineAt   DateTime?
 
   // Which agent did the work, and where. Free text: the CLI reports what it
@@ -364,6 +415,10 @@ model AgentRun {
   restoredAt           DateTime?
 
   workspace          Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // Restrict, not Cascade: a snapshot with runs under it cannot be deleted,
+  // because those runs are the record of what an agent did. Archiving is how a
+  // branch is retired — see `Snapshot.archivedAt`.
+  snapshot           Snapshot?      @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
   author             User?          @relation("AgentRunAuthor", fields: [authorId], references: [id], onDelete: SetNull)
   restoreRequestedBy User?          @relation("AgentRunRestorer", fields: [restoreRequestedById], references: [id], onDelete: SetNull)
   files              AgentRunFile[]
@@ -373,6 +428,7 @@ model AgentRun {
   @@unique([workspaceId, sequence])
   @@index([workspaceId, createdAt])
   @@index([workspaceId, categorySlug, createdAt])
+  @@index([snapshotId, createdAt])
   @@index([authorId])
   @@index([restoreRequestedById])
 }

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import {
-  MAX_CATEGORY_CHARS,
+  MAX_SNAPSHOT_NAME_CHARS,
   MAX_RUN_FILES,
   MAX_RUN_FILE_CHARS,
   MAX_RUN_TEXT_CHARS,
@@ -75,11 +75,34 @@ export const runFileSchema = z.object({
   after: z.string().max(MAX_RUN_FILE_CHARS).nullable(),
 });
 
+// A snapshot is a branch inside a workspace, so creating one needs the
+// workspace first — there is nowhere else for it to belong.
+export const createSnapshotSchema = z.object({
+  workspaceId: z.string().min(1, "Choose a workspace"),
+  name: z.string().trim().min(1, "Name the snapshot").max(MAX_SNAPSHOT_NAME_CHARS),
+  // Reported by the CLI when it creates the branch while taking a baseline.
+  // A snapshot made on the website has none until a machine baselines it.
+  baselinedAt: z.iso.datetime().nullable().default(null),
+});
+
+// Renaming, retiring, and bringing back. Retiring is the only way a snapshot
+// with runs under it leaves the pickers, because its runs are a record and
+// deleting them is not on the table.
+export const updateSnapshotSchema = z.union([
+  z.object({ name: z.string().trim().min(1, "Name the snapshot").max(MAX_SNAPSHOT_NAME_CHARS) }),
+  z.object({ action: z.enum(["archive", "unarchive"]) }),
+  z.object({ baselinedAt: z.iso.datetime() }),
+]);
+
 export const createRunSchema = z.object({
   workspaceId: z.string().min(1, "Choose a workspace"),
-  // Blank is allowed and means uncategorised: a run pushed without a snapshot
-  // name is still a run worth keeping.
-  category: z.string().trim().max(MAX_CATEGORY_CHARS).default(""),
+  // The branch this run belongs to. Optional for one reason only: a push from
+  // a CLI that predates workspace-owned snapshots sends `category` instead,
+  // and the route finds or creates the snapshot from it.
+  snapshotId: z.string().min(1).optional(),
+  // Blank is allowed and means unfiled: a run pushed without a snapshot name
+  // is still a run worth keeping.
+  category: z.string().trim().max(MAX_SNAPSHOT_NAME_CHARS).default(""),
   baselineAt: z.iso.datetime().nullable().default(null),
   agent: z.string().trim().max(120).default(""),
   root: z.string().trim().max(400).default(""),
@@ -104,3 +127,5 @@ export type UpdatePromptInput = z.infer<typeof updatePromptSchema>;
 export type GenerateCodeInput = z.infer<typeof generateCodeSchema>;
 export type CreateRunInput = z.infer<typeof createRunSchema>;
 export type RestoreRunInput = z.infer<typeof restoreRunSchema>;
+export type CreateSnapshotInput = z.infer<typeof createSnapshotSchema>;
+export type UpdateSnapshotInput = z.infer<typeof updateSnapshotSchema>;

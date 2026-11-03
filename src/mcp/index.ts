@@ -361,7 +361,7 @@ async function main(): Promise<void> {
   // Say where we point and whether a key was found, on stderr, because the
   // usual failure is an editor launching this with no environment at all.
   const client = createClient();
-  note(`v${VERSION} → ${client.url}${client.hasKey ? "" : " (no API key: set POPS_API_KEY)"}`);
+  note(`v${VERSION} → ${client.url}${client.hasKey ? "" : " (no API key: set X`_API_KEY)"}`);
   await server.connect(new StdioServerTransport());
 }
 

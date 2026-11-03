@@ -20,6 +20,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const run = await prisma.agentRun.findUnique({
       where: { id },
       include: {
+        snapshot: { select: { id: true, name: true, slug: true, archivedAt: true } },
         author: { select: { name: true } },
         restoreRequestedBy: { select: { name: true } },
         workspace: { select: { id: true, name: true, slug: true } },
@@ -34,6 +35,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       id: run.id,
       sequence: run.sequence,
       workspace: run.workspace,
+      snapshot: run.snapshot && {
+        id: run.snapshot.id,
+        name: run.snapshot.name,
+        slug: run.snapshot.slug,
+        archivedAt: run.snapshot.archivedAt?.toISOString() ?? null,
+      },
       category: run.category,
       categorySlug: run.categorySlug,
       baselineAt: run.baselineAt?.toISOString() ?? null,

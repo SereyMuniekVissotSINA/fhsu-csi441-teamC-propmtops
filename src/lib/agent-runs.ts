@@ -50,32 +50,33 @@ export const MAX_RUN_FILE_CHARS = 200_000;
 export const MAX_RUN_TOTAL_CHARS = 4_000_000;
 export const MAX_RUN_TEXT_CHARS = 100_000;
 export const MAX_TOOL_EVENTS_CHARS = 200_000;
-export const MAX_CATEGORY_CHARS = 60;
+export const MAX_SNAPSHOT_NAME_CHARS = 60;
 
 // ---------------------------------------------------------------------------
-// Categories
+// Snapshot names
 //
-// Runs are grouped inside a workspace by a name the developer chooses when
-// they take a baseline — usually the prompt or the piece of work the agent is
-// being pointed at. One category, one baseline: switching between them leaves
-// each one's baseline alone, so what changed under one name stays measured
-// against that name.
+// A snapshot is one line of work inside a workspace — a branch. The workspace
+// owns it, runs are filed under it, and a developer names it when they take
+// the baseline: usually the prompt, or the piece of work the agent is being
+// pointed at. One snapshot, one baseline: switching between them leaves each
+// one's baseline alone, so what changed under one name stays measured against
+// that name.
 //
 // The display name is kept as typed and a slug is stored beside it, because
-// the slug is what groups, filters and appears in a URL. Both the CLI and the
-// server derive the slug here, so "Auth refactor" and "auth-refactor" are
-// never two different containers.
+// the slug is what groups, filters and appears in a URL. The CLI, the API and
+// the browser all derive the slug here, so "Auth refactor" and "auth-refactor"
+// are one branch rather than two.
 // ---------------------------------------------------------------------------
 
-/** Shown wherever a run predates categories, or was pushed without one. */
-export const UNCATEGORISED = "Uncategorised";
+/** Shown for a run pushed before snapshots existed, which belongs to none. */
+export const UNFILED = "Unfiled";
 
-export function categorySlug(name: string): string {
+export function snapshotSlug(name: string): string {
   return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, MAX_CATEGORY_CHARS)
+    .slice(0, MAX_SNAPSHOT_NAME_CHARS)
     .replace(/-+$/, "");
 }
 
@@ -85,9 +86,9 @@ export function categorySlug(name: string): string {
  * A name that slugifies to nothing — punctuation only — is refused rather than
  * stored, because it could not be told apart from any other such name.
  */
-export function cleanCategoryName(raw: string): string | null {
-  const name = raw.trim().replace(/\s+/g, " ").slice(0, MAX_CATEGORY_CHARS);
-  return name && categorySlug(name) ? name : null;
+export function cleanSnapshotName(raw: string): string | null {
+  const name = raw.trim().replace(/\s+/g, " ").slice(0, MAX_SNAPSHOT_NAME_CHARS);
+  return name && snapshotSlug(name) ? name : null;
 }
 
 /**

@@ -235,6 +235,82 @@ export async function requestRestoreAction(
   return {};
 }
 
+/**
+ * Retire a snapshot, or bring it back.
+ *
+ * A snapshot with runs under it cannot be deleted — those runs are the record
+ * of what an agent changed — so archiving is how a finished branch leaves the
+ * pickers and the chips with its history intact. `onDelete: Restrict` in the
+ * schema is the backstop; this is the way out that does not need one.
+ */
+export async function archiveSnapshotAction(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = String(formData.get("id") ?? "");
+  const unarchive = formData.get("unarchive") === "1";
+
+  try {
+    await requireSession();
+    const snapshot = await prisma.snapshot.findUnique({
+      where: { id },
+      select: { workspaceId: true },
+    });
+    if (!snapshot) throw new AuthzError(404, "Snapshot not found.");
+
+    await requireMember(snapshot.workspaceId, "EDITOR");
+    await prisma.snapshot.update({
+      where: { id },
+      data: { archivedAt: unarchive ? null : new Date() },
+    });
+  } catch (error) {
+    return { error: messageOf(error) };
+  }
+
+  revalidatePath("/dashboard/runs");
+  return {};
+}
+
+/**
+ * Delete a snapshot that nothing is filed under.
+ *
+ * The count is checked here as well as by the foreign key, so a branch with
+ * runs gets a sentence rather than a constraint violation. A branch with runs
+ * is archived instead — see above.
+ */
+export async function deleteSnapshotAction(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = String(formData.get("id") ?? "");
+
+  try {
+    await requireSession();
+    const snapshot = await prisma.snapshot.findUnique({
+      where: { id },
+      select: { workspaceId: true, _count: { select: { runs: true } } },
+    });
+    if (!snapshot) throw new AuthzError(404, "Snapshot not found.");
+
+    await requireMember(snapshot.workspaceId, "EDITOR");
+    if (snapshot._count.runs > 0) {
+      throw new AuthzError(
+        409,
+        `This snapshot has ${snapshot._count.runs} run${
+          snapshot._count.runs === 1 ? "" : "s"
+        } filed under it. Archive it instead.`,
+      );
+    }
+
+    await prisma.snapshot.delete({ where: { id } });
+  } catch (error) {
+    return { error: messageOf(error) };
+  }
+
+  revalidatePath("/dashboard/runs");
+  return {};
+}
+
 async function uniqueSlug(name: string): Promise<string> {
   const base =
     name

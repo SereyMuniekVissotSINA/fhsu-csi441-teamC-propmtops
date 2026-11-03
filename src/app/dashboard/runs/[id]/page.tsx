@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 
 import { FileDiff } from "@/components/file-diff";
 import {
-  UNCATEGORISED,
+  UNFILED,
   describeRestore,
   describeRun,
   parseToolEvents,
@@ -39,6 +39,7 @@ export default async function RunPage({ params }: PageProps<"/dashboard/runs/[id
           members: { where: { userId: session.user.id }, select: { role: true } },
         },
       },
+      snapshot: { select: { id: true, name: true, slug: true, archivedAt: true } },
       author: { select: { name: true } },
       restoreRequestedBy: { select: { name: true } },
       files: { orderBy: { path: "asc" } },
@@ -63,10 +64,11 @@ export default async function RunPage({ params }: PageProps<"/dashboard/runs/[id
         <Link
           className="hover:text-white"
           href={`/dashboard/runs?workspace=${run.workspace.slug}${
-            run.categorySlug ? `&category=${encodeURIComponent(run.categorySlug)}` : ""
+            run.snapshot ? `&snapshot=${encodeURIComponent(run.snapshot.slug)}` : ""
           }`}
         >
-          {run.category || UNCATEGORISED}
+          {run.snapshot?.name ?? run.category ?? UNFILED}
+          {run.snapshot?.archivedAt ? " (archived)" : ""}
         </Link>
       </nav>
 
@@ -82,7 +84,7 @@ export default async function RunPage({ params }: PageProps<"/dashboard/runs/[id
         </p>
         {run.baselineAt ? (
           <p className="mt-1 text-xs text-zinc-500">
-            Measured against the {run.category || UNCATEGORISED} baseline taken{" "}
+            Measured against the {run.snapshot?.name ?? run.category ?? UNFILED} baseline taken{" "}
             {run.baselineAt.toISOString().slice(0, 16).replace("T", " ")}.
           </p>
         ) : null}

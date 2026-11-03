@@ -6,10 +6,12 @@ import { parseArgs } from "node:util";
 
 import {
   type AgentChange,
+  UNFILED,
   classifyLocalChanges,
   describeRestore,
   restoreSteps,
   runStats,
+  snapshotSlug,
 } from "@/lib/agent-runs";
 import { composePrompt, variableNames } from "@/lib/prompts-core";
 
@@ -28,10 +30,15 @@ import { changeCount, paint, paintChange, renderDiff, table, truncate, when } fr
 import { matchKey, matchPrompt, parseRange, parseRef, parseVariables } from "./resolve";
 import { askPassword, passwordSignIn } from "./session";
 import {
+  activeSnapshot,
   applyRestore,
+  forgetSnapshot,
+  linkSnapshot,
   localChanges,
+  setWorkspace,
+  storedWorkspace,
   suggestedName,
-  summariseCategories,
+  summariseSnapshots,
   takeSnapshot,
 } from "./snapshot";
 
@@ -65,11 +72,17 @@ Workflow
   log <prompt>                  The generated-code commit log
   commit <prompt> [c2]          One commit: files and metadata  (--diff, --file path)
 
-Agent runs (what an agent changed on this machine)
-  snapshot [name]               Baseline this project before the agent works
-  snapshots                     The snapshot categories here, and their drift
+Snapshots and agent runs
+  A snapshot is a branch inside a workspace, so \`snapshot\` settles the
+  workspace first, then names the branch and baselines this project's files.
+
+  snapshot [name]               Choose a workspace, name a branch, baseline
+  snapshot delete <name>        Forget the baseline, and the branch if unused
+  snapshot archive <name>       Retire a branch, keeping its runs readable
+  snapshot unarchive <name>     Bring a retired branch back
+  snapshots [--archived]        This workspace's branches, and their drift
   status [--diff]               What has changed since the active baseline
-  push --prompt "…"             Record the diff as a run  (--agent, --category)
+  push --prompt "…"             Record the diff as a run  (--agent, --snapshot)
   restore <r7>                  Put a run's pre-run files back  (--yes)
   restore --watch --yes         Apply restores asked for on the website
 
@@ -87,11 +100,12 @@ API keys (workspace owners, after \`auth login --email\`)
 Options
   --workspace <slug|id>   Which workspace to act in
   --root <path>           Project directory for the run commands (default: cwd)
-  --category <name>       Act on this snapshot, without making it the active one
+  --snapshot <name>       Act on this branch, without making it the active one
+  --archived              Include retired branches in \`snapshots\`
   --prompt <text>         What the agent was asked for, recorded with the run
   --agent <name>          Which agent did the work  (default: this host name)
   --response <text>       The agent's own account of the run, kept for the record
-  --yes                   Do not ask before overwriting files in a restore
+  --yes                   Do not ask before overwriting files, or deleting a baseline
   --watch                 Keep applying restores as the website asks for them
   --email <address>       Sign in as this user
   --password <text>       Skip the password prompt (prefer POPS_PASSWORD)
@@ -114,10 +128,13 @@ A run is the other way round: the agent has already edited files here, and the
 diff against a baseline is what gets recorded, so \`push\` reaches no model and
 works against a deployed app.
 
-  pops snapshot                      # baseline, and name the work
+  pops snapshot                      # pick the workspace, name the branch
   # …let the agent edit files…
   pops status --diff
   pops push --prompt "what you asked for"
+
+The branch and its runs live in the workspace; the baseline — the copy of the
+tree a push diffs against — stays in this project's .pops directory.
 
 First run, from nothing:
 
@@ -146,7 +163,8 @@ type Options = {
   name?: string;
   save: boolean;
   root?: string;
-  category?: string;
+  snapshot?: string;
+  archived: boolean;
   prompt?: string;
   agent?: string;
   response?: string;
@@ -176,7 +194,8 @@ async function main(argv: string[]): Promise<number> {
       name: { type: "string" },
       save: { type: "boolean", default: false },
       root: { type: "string" },
-      category: { type: "string" },
+      snapshot: { type: "string" },
+      archived: { type: "boolean", default: false },
       prompt: { type: "string" },
       agent: { type: "string" },
       response: { type: "string" },
@@ -228,9 +247,9 @@ async function main(argv: string[]): Promise<number> {
     // The snapshot commands touch only the filesystem, so they need no client
     // and work with the app down.
     case "snapshot":
-      return snapshot(rest[0], options);
+      return snapshot(client(), rest, options);
     case "snapshots":
-      return snapshots(options);
+      return snapshots(client(), options);
     case "status":
       return status(options);
     case "push":
@@ -1005,12 +1024,18 @@ async function commit(
   return 0;
 }
 
-// --- agent runs -------------------------------------------------------------
+// --- snapshots and agent runs -----------------------------------------------
 //
 // The local half of the product: an agent edits files on this machine, and the
 // diff against a baseline taken beforehand becomes a run on the website. The
 // filesystem is the source of truth throughout — nothing here asks an agent
 // what it changed.
+//
+// A snapshot is a branch, and a branch belongs to a workspace, so `pops
+// snapshot` settles the workspace before it will name one. What the server
+// keeps is the branch and its runs; the baseline — the copy of the tree a push
+// diffs against — stays in `.pops/`, because it is only ever compared against
+// this machine's files.
 
 type RunFileSummary = {
   path: string;
@@ -1024,6 +1049,7 @@ type RunSummary = {
   id: string;
   sequence: number;
   workspace?: { id: string; name: string; slug: string };
+  snapshotId: string | null;
   category: string;
   categorySlug: string;
   agent: string;
@@ -1043,37 +1069,177 @@ type RunDetail = RunSummary & {
   files: (RunFileSummary & { before: string; after: string })[];
 };
 
+/** A branch as the server holds it. */
+type ServerSnapshot = {
+  id: string;
+  name: string;
+  slug: string;
+  runs: number;
+  baselinedAt: string | null;
+  archivedAt: string | null;
+  createdAt: string;
+};
+
 /** Where the commands act: `--root`, or the directory the CLI was run from. */
 function projectRoot(options: Options): string {
   return resolve(options.root ?? process.cwd());
 }
 
+async function snapshot(client: Client, args: string[], options: Options): Promise<number> {
+  const [first, ...rest] = args;
+  // `delete`, `rm`, `archive` and `unarchive` read as subcommands rather than
+  // names. A snapshot genuinely called "delete" is still reachable as
+  // `pops snapshot --snapshot delete`.
+  if (first === "delete" || first === "rm") {
+    return deleteSnapshot(client, rest[0] ?? options.snapshot, options);
+  }
+  if (first === "archive" || first === "unarchive") {
+    return archiveSnapshot(client, first, rest[0] ?? options.snapshot, options);
+  }
+  return takeBaseline(client, first, options);
+}
+
 /**
- * Take a baseline, naming it if the user did not.
+ * Choose or create the workspace this project pushes to.
  *
- * The name is asked for right after the copy is made, which is the moment the
- * developer actually knows what the work is called. With no terminal to ask on
- * the suggestion is accepted silently — a hook taking a baseline should not
- * hang on a question nobody will answer.
+ * A snapshot is a branch inside a workspace, so this comes first: there is
+ * nothing for a branch to belong to until it is settled. Asked once and then
+ * remembered in `.pops/index.json`, because a project does not change
+ * workspaces often and being asked every time would be noise.
  */
-async function snapshot(name: string | undefined, options: Options): Promise<number> {
-  const root = projectRoot(options);
-  const chosen = name ?? options.category ?? (await ask("Name this snapshot", suggestedName(root)));
-  const { snapshot: taken, category, created } = takeSnapshot(root, chosen);
+async function chooseWorkspace(
+  client: Client,
+  root: string,
+  options: Options,
+): Promise<Workspace> {
+  const list = await client.request<Workspace[]>("/api/workspaces");
 
-  if (options.json) return print({ category, files: Object.keys(taken.files).length });
+  if (options.workspace) {
+    const named = list.find(
+      (candidate) => candidate.slug === options.workspace || candidate.id === options.workspace,
+    );
+    if (!named) {
+      const slugs = list.map((candidate) => candidate.slug).join(", ") || "none";
+      throw new CliError(`No workspace "${options.workspace}". You can reach: ${slugs}.`);
+    }
+    return named;
+  }
 
-  const count = Object.keys(taken.files).length;
-  console.log(
-    `${created ? "Started" : "Re-baselined"} ${paint(category.name, "bold")} from ${count} file${
-      count === 1 ? "" : "s"
-    }.`,
+  // What this project chose last time. A workspace that has since gone — or
+  // that this key can no longer reach — falls through to being asked again
+  // rather than failing.
+  const stored = storedWorkspace(root);
+  const remembered = stored ? list.find((candidate) => candidate.id === stored) : undefined;
+  if (remembered) return remembered;
+
+  if (list.length === 1) return list[0];
+  if (list.length === 0) return createWorkspace(client, options);
+
+  console.log("Which workspace should this project push to?");
+  list.forEach((workspace, position) => {
+    console.log(`  ${position + 1}) ${workspace.name} ${paint(`(${workspace.slug})`, "dim")}`);
+  });
+  console.log(`  ${paint("n) a new workspace", "dim")}`);
+
+  const answer = await ask("Workspace", "1");
+  if (/^n(ew)?$/i.test(answer.trim())) return createWorkspace(client, options);
+
+  const chosen =
+    list[Number(answer) - 1] ??
+    list.find(
+      (candidate) =>
+        candidate.slug === answer.trim() ||
+        candidate.name.toLowerCase() === answer.trim().toLowerCase(),
+    );
+  if (!chosen) throw new CliError(`"${answer}" is not one of the workspaces listed.`);
+  return chosen;
+}
+
+/**
+ * Create a workspace from the terminal.
+ *
+ * Session-only, and not an oversight: a key is scoped to the workspace it was
+ * minted in, so it cannot mint another workspace any more than it can mint
+ * another key. Signing in is the honest requirement, and saying so beats a
+ * bare 401 from the route.
+ */
+async function createWorkspace(client: Client, options: Options): Promise<Workspace> {
+  if (!client.hasSession) {
+    throw new CliError(
+      "Creating a workspace needs a signed-in user, not an API key.\n" +
+        "Run `pops auth login --email you@example.com` first, or create it in the dashboard\n" +
+        "and re-run this with --workspace <slug>.",
+    );
+  }
+
+  const name = options.name ?? (await ask("New workspace name", "My workspace"));
+  const workspace = await client.sessionRequest<{ id: string; name: string; slug: string }>(
+    "/api/workspaces",
+    { method: "POST", body: JSON.stringify({ name }) },
   );
-  if (taken.skipped.length > 0) {
+  console.log(`Created workspace ${paint(workspace.name, "bold")} (${workspace.slug}).`);
+  return workspace as Workspace;
+}
+
+/**
+ * Name the branch, then baseline the tree.
+ *
+ * The workspace is settled first, then the branch is created on the server —
+ * an upsert, so re-baselining an existing name is the same branch rather than
+ * a second one — and only then is the copy of the tree taken. The name is
+ * asked for at that point because it is the moment the developer knows what
+ * the work is called; with no terminal to ask on the suggestion is accepted
+ * silently, so a hook does not hang on a question nobody will answer.
+ */
+async function takeBaseline(
+  client: Client,
+  name: string | undefined,
+  options: Options,
+): Promise<number> {
+  const root = projectRoot(options);
+  const workspace = await chooseWorkspace(client, root, options);
+
+  const existing = await client.request<{ snapshots: ServerSnapshot[] }>(
+    `/api/snapshots?workspaceId=${workspace.id}`,
+  );
+  const chosen = name ?? options.snapshot ?? (await askSnapshotName(root, existing.snapshots));
+
+  // Created before the baseline, so a name the server will not accept costs
+  // nothing but the question, and so the branch exists even if the copy fails.
+  const takenAt = new Date().toISOString();
+  const registered = await client.request<ServerSnapshot>("/api/snapshots", {
+    method: "POST",
+    body: JSON.stringify({ workspaceId: workspace.id, name: chosen, baselinedAt: takenAt }),
+  });
+
+  const { baseline, snapshot, created } = takeSnapshot(root, registered.name);
+  setWorkspace(root, workspace.id);
+  linkSnapshot(root, snapshot.slug, registered.id);
+
+  if (options.json) {
+    return print({ workspace, snapshot: registered, files: Object.keys(baseline.files).length });
+  }
+
+  const count = Object.keys(baseline.files).length;
+  console.log(
+    `${created ? "Started" : "Re-baselined"} ${paint(registered.name, "bold")} in ${paint(
+      workspace.name,
+      "bold",
+    )} from ${count} file${count === 1 ? "" : "s"}.`,
+  );
+  if (registered.runs > 0) {
     console.log(
       paint(
-        `  ${taken.skipped.length} file${
-          taken.skipped.length === 1 ? "" : "s"
+        `  ${registered.runs} run${registered.runs === 1 ? "" : "s"} already filed under it.`,
+        "dim",
+      ),
+    );
+  }
+  if (baseline.skipped.length > 0) {
+    console.log(
+      paint(
+        `  ${baseline.skipped.length} file${
+          baseline.skipped.length === 1 ? "" : "s"
         } left untracked (binary or too large), and excluded from both sides of the diff.`,
         "dim",
       ),
@@ -1083,40 +1249,103 @@ async function snapshot(name: string | undefined, options: Options): Promise<num
   return 0;
 }
 
-/** Every category in this project, and how far each has drifted. */
-function snapshots(options: Options): number {
+/** Offer the branches the workspace already has, then ask for a name. */
+async function askSnapshotName(root: string, existing: ServerSnapshot[]): Promise<string> {
+  if (existing.length > 0) {
+    console.log("Snapshots in this workspace:");
+    for (const entry of existing.slice(0, 10)) {
+      const runs = `${entry.runs} run${entry.runs === 1 ? "" : "s"}`;
+      const baselined = entry.baselinedAt ? when(entry.baselinedAt) : "never baselined";
+      console.log(`  ${entry.name} ${paint(`· ${runs} · ${baselined}`, "dim")}`);
+    }
+    console.log(paint("Name one of those to continue it, or anything else to start a branch.", "dim"));
+  }
+  return ask("Name this snapshot", suggestedName(root));
+}
+
+/**
+ * The branches this workspace holds, and how far each local baseline has
+ * drifted from the tree.
+ *
+ * The server knows the branches and their runs; only this machine knows the
+ * drift, so the two are merged here. A branch nobody has baselined locally
+ * still shows, because it is somewhere a push can go.
+ */
+async function snapshots(client: Client, options: Options): Promise<number> {
   const root = projectRoot(options);
-  const { index, rows } = summariseCategories(root);
-  if (options.json) return print(rows);
-  if (rows.length === 0) {
-    return say(`No snapshots in ${root}. Start one with \`pops snapshot\`.`);
+  const { rows } = summariseSnapshots(root);
+  const local = new Map(rows.map((row) => [row.slug, row]));
+
+  let remote: ServerSnapshot[] = [];
+  let unreachable = false;
+  try {
+    const workspace = await chooseWorkspace(client, root, options);
+    const listed = await client.request<{ snapshots: ServerSnapshot[] }>(
+      `/api/snapshots?workspaceId=${workspace.id}&archived=${options.archived ? "1" : "0"}`,
+    );
+    remote = listed.snapshots;
+  } catch (error) {
+    // Worth printing what is on disk anyway: the baselines are local, and a
+    // developer asking what this project tracks should get an answer with the
+    // app down.
+    if (!(error instanceof CliError)) throw error;
+    unreachable = true;
   }
 
-  console.log(
-    table([
-      ["", "NAME", "FILES", "CHANGED", "BASELINE"],
-      ...rows.map((row) => [
-        row.slug === index.active ? paint("*", "green") : " ",
-        row.name,
-        String(row.files),
-        row.changed === null ? paint("no baseline", "dim") : String(row.changed),
-        row.takenAt ? when(row.takenAt) : paint("never", "dim"),
-      ]),
-    ]),
-  );
+  if (options.json) return print({ remote, local: rows });
+
+  if (remote.length === 0 && rows.length === 0) {
+    return say(`No snapshots for ${root}. Start one with \`pops snapshot\`.`);
+  }
+
+  const seen = new Set<string>();
+  const lines: string[][] = [["", "NAME", "RUNS", "FILES", "CHANGED", "BASELINE"]];
+
+  for (const entry of remote) {
+    seen.add(entry.slug);
+    const here = local.get(entry.slug);
+    lines.push([
+      here && here.slug === activeSnapshot(root)?.slug ? paint("*", "green") : " ",
+      entry.archivedAt ? `${entry.name} ${paint("(archived)", "dim")}` : entry.name,
+      String(entry.runs),
+      here ? String(here.files) : paint("—", "dim"),
+      here?.changed === undefined || here.changed === null
+        ? paint(here ? "no baseline" : "not here", "dim")
+        : String(here.changed),
+      here?.takenAt ? when(here.takenAt) : paint("never", "dim"),
+    ]);
+  }
+
+  // Baselines this machine has that the server does not know about: an index
+  // written before snapshots belonged to a workspace, or one taken while the
+  // app was down. The next `pops snapshot` under that name registers it.
+  for (const row of rows) {
+    if (seen.has(row.slug)) continue;
+    lines.push([
+      row.slug === activeSnapshot(root)?.slug ? paint("*", "green") : " ",
+      `${row.name} ${paint(unreachable ? "" : "(local only)", "dim")}`.trimEnd(),
+      paint("—", "dim"),
+      String(row.files),
+      row.changed === null ? paint("no baseline", "dim") : String(row.changed),
+      row.takenAt ? when(row.takenAt) : paint("never", "dim"),
+    ]);
+  }
+
+  console.log(table(lines));
+  if (unreachable) {
+    console.log(paint(`\nCould not reach ${client.url}, so this is what is on disk only.`, "yellow"));
+  }
   return 0;
 }
 
 /** What has changed under the active baseline, without pushing anything. */
 function status(options: Options): number {
   const root = projectRoot(options);
-  const { category, snapshot: baseline, changes } = localChanges(root, options.category);
+  const { snapshot, baseline, changes } = localChanges(root, options.snapshot);
   const files = classifyLocalChanges(changes);
-  if (options.json) return print({ category, baselineAt: baseline.takenAt, files });
+  if (options.json) return print({ snapshot, baselineAt: baseline.takenAt, files });
 
-  console.log(
-    `${paint(category.name, "bold")} · baseline ${when(baseline.takenAt)} · ${root}`,
-  );
+  console.log(`${paint(snapshot.name, "bold")} · baseline ${when(baseline.takenAt)} · ${root}`);
   if (files.length === 0) {
     return say(paint("Nothing has changed since that baseline.", "dim"));
   }
@@ -1137,22 +1366,43 @@ function status(options: Options): number {
   return 0;
 }
 
-/** Record the run: the diff against the baseline, pushed to the website. */
+/** Record the run: the diff against the baseline, filed under its branch. */
 async function push(client: Client, options: Options): Promise<number> {
   const root = projectRoot(options);
-  const { category, snapshot: baseline, changes } = localChanges(root, options.category);
+  const { snapshot, baseline, changes } = localChanges(root, options.snapshot);
   if (changes.length === 0) {
     return say(
-      `Nothing has changed in ${root} since the ${category.name} baseline, so there is no run to push.`,
+      `Nothing has changed in ${root} since the ${snapshot.name} baseline, so there is no run to push.`,
     );
   }
 
-  const workspace = await runWorkspace(client, options);
+  const workspace = await chooseWorkspace(client, root, options);
+
+  // A baseline taken before snapshots belonged to a workspace — or while the
+  // app was unreachable — has no branch yet. Registering it here rather than
+  // refusing keeps the push working: the name is what it was baselined under.
+  const snapshotId =
+    snapshot.snapshotId ??
+    (
+      await client.request<ServerSnapshot>("/api/snapshots", {
+        method: "POST",
+        body: JSON.stringify({
+          workspaceId: workspace.id,
+          name: snapshot.name,
+          baselinedAt: baseline.takenAt || null,
+        }),
+      })
+    ).id;
+  if (!snapshot.snapshotId) linkSnapshot(root, snapshot.slug, snapshotId);
+
   const run = await client.request<RunSummary>("/api/runs", {
     method: "POST",
     body: JSON.stringify({
       workspaceId: workspace.id,
-      category: category.name,
+      snapshotId,
+      // Sent beside the id so a server that has not been updated yet still
+      // files the run under the right name.
+      category: snapshot.name,
       baselineAt: baseline.takenAt || null,
       // Free text, and the host name is a reasonable default: it says which
       // machine the files are on, which is what a restore needs to know.
@@ -1168,16 +1418,17 @@ async function push(client: Client, options: Options): Promise<number> {
     }),
   });
 
+  setWorkspace(root, workspace.id);
   // The baseline moves to what was just recorded, so the next run measures
-  // from here rather than re-pushing the same diff. A one-off `--category`
-  // stays one-off: it does not become the working category.
-  takeSnapshot(root, category.name, { makeActive: !options.category });
+  // from here rather than re-pushing the same diff. A one-off `--snapshot`
+  // stays one-off: it does not become the working branch.
+  takeSnapshot(root, snapshot.name, { makeActive: !options.snapshot });
 
   if (options.json) return print(run);
 
   console.log(
     `${paint(`r${run.sequence}`, "cyan")} ${paint(run.summary, "bold")} ${paint(
-      `in ${category.name}`,
+      `in ${snapshot.name}`,
       "dim",
     )}`,
   );
@@ -1196,31 +1447,143 @@ async function push(client: Client, options: Options): Promise<number> {
 }
 
 /**
- * Which workspace the run commands act in.
+ * Forget a branch.
  *
- * A key is scoped to one workspace, so the usual case needs no flag. Picking
- * one of several silently would be worse than asking: run numbers are per
- * workspace, so `r7` means a different run in each, and a push would be filed
- * somewhere the developer was not thinking about.
+ * Two things carry the name: the baseline on this disk, and the branch in the
+ * workspace. The baseline is always forgotten — it is this machine's copy. The
+ * branch is deleted only when nothing is filed under it; a branch with runs is
+ * the record of what an agent did to someone's files, and the route refuses,
+ * which is what `archive` is for.
  */
-async function runWorkspace(client: Client, options: Options) {
-  const list = await client.request<Workspace[]>("/api/workspaces");
-  if (options.workspace) {
-    const chosen = list.find(
-      (candidate) => candidate.slug === options.workspace || candidate.id === options.workspace,
+async function deleteSnapshot(
+  client: Client,
+  named: string | undefined,
+  options: Options,
+): Promise<number> {
+  const root = projectRoot(options);
+  if (!named) {
+    throw new CliError(
+      "Which snapshot? Pass its name, as `pops snapshot delete \"auth refactor\"`.\n" +
+        "`pops snapshots` lists the ones this project has.",
     );
-    if (!chosen) {
-      const slugs = list.map((candidate) => candidate.slug).join(", ") || "none";
-      throw new CliError(`No workspace "${options.workspace}". You can reach: ${slugs}.`);
+  }
+
+  // Looked up before anything is written, so a typo costs nothing.
+  const { rows } = summariseSnapshots(root);
+  const slug = snapshotSlug(named);
+  const row = rows.find((candidate) => candidate.slug === slug);
+  if (!row) {
+    const known = rows.map((candidate) => candidate.name).join(", ") || "none yet";
+    throw new CliError(`No snapshot "${named}" in ${root}.\n  This project has: ${known}.`);
+  }
+
+  const outstanding = row.changed ?? 0;
+  console.log(
+    `${paint(row.name, "bold")} · ${row.files} file${row.files === 1 ? "" : "s"} · baseline ${
+      row.takenAt ? when(row.takenAt) : "never taken"
+    }`,
+  );
+  if (outstanding > 0) {
+    console.log(
+      paint(
+        `${outstanding} file${
+          outstanding === 1 ? " has" : "s have"
+        } changed since that baseline and ${
+          outstanding === 1 ? "has" : "have"
+        } not been pushed. Deleting it loses the before-contents, so those changes could no longer be recorded or undone.`,
+        "yellow",
+      ),
+    );
+  }
+
+  if (!options.yes && !(await confirm(`Forget the ${row.name} baseline?`))) {
+    return say("Left alone.");
+  }
+
+  // The branch first: if the server refuses because runs are filed under it,
+  // the developer should hear that before the local copy is gone.
+  let branch: string;
+  if (row.snapshotId) {
+    try {
+      await client.request(`/api/snapshots/${row.snapshotId}`, { method: "DELETE" });
+      branch = "and the branch it names in the workspace";
+    } catch (error) {
+      if (!(error instanceof CliError) || error.status !== 409) throw error;
+      console.log(paint(error.message, "yellow"));
+      console.log(
+        paint(`Keeping the branch. \`pops snapshot archive "${row.name}"\` retires it.`, "dim"),
+      );
+      branch = "but the branch stays in the workspace, with its runs";
     }
-    return chosen;
+  } else {
+    branch = "which the workspace did not know about";
   }
-  if (list.length === 0) throw new CliError("No workspace to push to.");
-  if (list.length > 1) {
-    const slugs = list.map((candidate) => candidate.slug).join(", ");
-    throw new CliError(`You can reach several workspaces. Pass --workspace <${slugs}>.`);
+
+  const { snapshot, hadBaseline, remaining } = forgetSnapshot(root, named);
+  if (options.json) return print({ snapshot, hadBaseline, remaining });
+
+  console.log(
+    `Forgot the ${paint(snapshot.name, "bold")} baseline${
+      hadBaseline ? "" : " (there was none on disk)"
+    }, ${branch}.`,
+  );
+  console.log(
+    paint(
+      remaining.length === 0
+        ? "This project tracks nothing now. `pops snapshot` starts again."
+        : `Still here: ${remaining.map((entry) => entry.name).join(", ")}. ` +
+          "None is active — name one with `pops snapshot <name>` before the next push.",
+      "dim",
+    ),
+  );
+  return 0;
+}
+
+/**
+ * Retire a branch, or bring it back.
+ *
+ * Archiving is how a finished line of work leaves the pickers and the chips
+ * while its runs stay readable — the answer for a branch that cannot be
+ * deleted because something is filed under it. The local baseline is left
+ * alone: `pops snapshot delete` is for that.
+ */
+async function archiveSnapshot(
+  client: Client,
+  action: "archive" | "unarchive",
+  named: string | undefined,
+  options: Options,
+): Promise<number> {
+  const root = projectRoot(options);
+  if (!named) throw new CliError(`Which snapshot? Pass its name to \`pops snapshot ${action}\`.`);
+
+  const workspace = await chooseWorkspace(client, root, options);
+  const { snapshots: listed } = await client.request<{ snapshots: ServerSnapshot[] }>(
+    `/api/snapshots?workspaceId=${workspace.id}&archived=1`,
+  );
+  const slug = snapshotSlug(named);
+  const target = listed.find((candidate) => candidate.slug === slug);
+  if (!target) {
+    const known = listed.map((candidate) => candidate.name).join(", ") || "none";
+    throw new CliError(
+      `No snapshot "${named}" in ${workspace.slug}.\n  That workspace has: ${known}.`,
+    );
   }
-  return list[0];
+
+  const updated = await client.request<ServerSnapshot>(`/api/snapshots/${target.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ action }),
+  });
+  if (options.json) return print(updated);
+
+  console.log(
+    action === "archive"
+      ? `Archived ${paint(updated.name, "bold")}. Its ${updated.runs} run${
+          updated.runs === 1 ? " stays" : "s stay"
+        } readable; it is out of the pickers and the chips.`
+      : `Brought ${paint(updated.name, "bold")} back.`,
+  );
+  console.log(paint("The baseline on this machine is untouched.", "dim"));
+  return 0;
 }
 
 /**
@@ -1255,7 +1618,7 @@ async function resolveRun(
   }
 
   const sequence = parseRef(ref, "r");
-  const workspace = await runWorkspace(client, options);
+  const workspace = await chooseWorkspace(client, projectRoot(options), options);
   const { runs } = await client.request<{ runs: RunSummary[] }>(
     `/api/runs?workspaceId=${workspace.id}`,
   );
@@ -1284,7 +1647,7 @@ async function applyRun(client: Client, run: RunDetail, options: Options): Promi
 
   console.log(
     `${paint(`r${run.sequence}`, "cyan")} ${run.summary} ${paint(
-      `· ${run.category || "uncategorised"} · ${when(run.createdAt)}`,
+      `· ${run.category || UNFILED} · ${when(run.createdAt)}`,
       "dim",
     )}`,
   );
@@ -1344,7 +1707,7 @@ async function watchRestores(client: Client, options: Options): Promise<number> 
   }
 
   const root = projectRoot(options);
-  const workspace = await runWorkspace(client, options);
+  const workspace = await chooseWorkspace(client, projectRoot(options), options);
   console.log(
     `Watching ${client.url} for ${workspace.slug} restores to apply in ${paint(root, "bold")}.`,
   );

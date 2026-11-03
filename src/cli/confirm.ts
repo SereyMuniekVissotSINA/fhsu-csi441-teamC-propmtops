@@ -26,19 +26,17 @@ export async function ask(question: string, fallback: string): Promise<string> {
 }
 
 /**
- * Ask before overwriting someone's working directory.
+ * Ask before destroying something: a working directory a restore overwrites,
+ * or a baseline a delete forgets.
  *
- * Restoring a run is the one command here that changes files on disk, so it
- * asks by default. With no terminal to ask on — a hook, a script, `--watch` —
- * there is nothing to prompt, and the caller has to have said `--yes` already;
- * saying so is better than assuming consent.
+ * With no terminal to ask on — a hook, a script, `--watch` — there is nothing
+ * to prompt, and the caller has to have said `--yes` already; saying so is
+ * better than assuming consent.
  */
 export async function confirm(question: string): Promise<boolean> {
   const input = process.stdin;
   if (!input.isTTY) {
-    throw new CliError(
-      "No terminal to confirm on. Re-run with --yes if you mean to overwrite these files.",
-    );
+    throw new CliError("No terminal to confirm on. Re-run with --yes if you mean to go ahead.");
   }
 
   const reader = createInterface({ input, output: process.stdout, terminal: true });

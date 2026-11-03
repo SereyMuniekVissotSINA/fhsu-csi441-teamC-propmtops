@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 
 import {
   MAX_RUN_TOTAL_CHARS,
-  categorySlug,
+  snapshotSlug,
   classifyLocalChanges,
-  cleanCategoryName,
+  cleanSnapshotName,
   describeRun,
   runCharCount,
   runStats,
@@ -35,7 +35,10 @@ export async function GET(request: Request) {
     // Slugged here as well as by the caller, so `?category=Auth Refactor` and
     // `?category=auth-refactor` reach the same container.
     const category = url.searchParams.get("category");
-    const slug = category === null ? null : categorySlug(category);
+    const slug = category === null ? null : snapshotSlug(category);
+    // By branch id, which is what the snapshot pages link with. The slug
+    // filter stays for the chips and for a name typed by hand.
+    const snapshotId = url.searchParams.get("snapshotId");
 
     // Scoping to one workspace still goes through the caller check, so a
     // guessed id cannot be used to read someone else's runs.
@@ -50,6 +53,7 @@ export async function GET(request: Request) {
       where: {
         ...(workspaceId ? { workspaceId } : scope),
         ...(pendingRestore ? { restoreRequestedAt: { not: null }, restoredAt: null } : {}),
+        ...(snapshotId ? { snapshotId } : {}),
         ...(slug === null ? {} : { categorySlug: slug }),
       },
       // Newest first across the whole workspace, deliberately not grouped by
@@ -84,6 +88,7 @@ export async function GET(request: Request) {
         id: run.id,
         sequence: run.sequence,
         workspace: run.workspace,
+        snapshotId: run.snapshotId,
         category: run.category,
         categorySlug: run.categorySlug,
         baselineAt: run.baselineAt?.toISOString() ?? null,
@@ -116,10 +121,19 @@ export async function POST(request: Request) {
     if (!parsed.success) return invalid(parsed.error);
 
     const { workspaceId, agent, root, prompt, response, toolEvents, files } = parsed.data;
-    // Normalized here rather than trusted: the slug is what groups runs, so it
-    // has to come from one rule both ends share.
-    const category = cleanCategoryName(parsed.data.category) ?? "";
     const { caller } = await requireCallerWorkspace(request, workspaceId, "EDITOR");
+
+    // Which branch this run belongs to. `snapshotId` is what the CLI sends
+    // once it has created the snapshot; a bare name is accepted so a push from
+    // a CLI that predates workspace-owned snapshots still lands somewhere, and
+    // it finds or creates the branch by slug rather than filing the run loose.
+    const snapshot = await resolveSnapshot(
+      workspaceId,
+      parsed.data.snapshotId,
+      parsed.data.category,
+      authorIdFor(caller),
+      parsed.data.baselineAt,
+    );
 
     // Classified server-side rather than trusting a status from the client: a
     // stored run must never claim a change its own contents contradict.
@@ -142,7 +156,9 @@ export async function POST(request: Request) {
     const run = await appendRun({
       workspaceId,
       authorId: authorIdFor(caller),
-      category,
+      snapshotId: snapshot?.id ?? null,
+      // Copied onto the run as it stood at push time, beside the relation.
+      category: snapshot?.name ?? "",
       baselineAt: parsed.data.baselineAt ? new Date(parsed.data.baselineAt) : null,
       agent,
       root,
@@ -159,6 +175,52 @@ export async function POST(request: Request) {
 }
 
 /**
+ * The branch a push belongs to.
+ *
+ * A snapshot id is checked against the workspace rather than trusted: a key is
+ * scoped to one workspace, and a run must never be filed under a branch in
+ * somebody else's. A name instead of an id is the older CLI's shape, and is
+ * found or created by slug — a push naming its branch is as good as creating
+ * it, and better than leaving the run unfiled.
+ */
+async function resolveSnapshot(
+  workspaceId: string,
+  snapshotId: string | undefined,
+  rawName: string,
+  authorId: string | null,
+  baselineAt: string | null,
+) {
+  if (snapshotId) {
+    const snapshot = await prisma.snapshot.findUnique({
+      where: { id: snapshotId },
+      select: { id: true, name: true, workspaceId: true },
+    });
+    if (!snapshot || snapshot.workspaceId !== workspaceId) {
+      throw new AuthzError(404, "Snapshot not found.");
+    }
+    return snapshot;
+  }
+
+  const name = cleanSnapshotName(rawName);
+  // No id and no usable name: the push predates snapshots entirely. The run is
+  // still worth keeping, and shows as unfiled.
+  if (!name) return null;
+
+  return prisma.snapshot.upsert({
+    where: { workspaceId_slug: { workspaceId, slug: snapshotSlug(name) } },
+    create: {
+      workspaceId,
+      authorId,
+      name,
+      slug: snapshotSlug(name),
+      baselinedAt: baselineAt ? new Date(baselineAt) : null,
+    },
+    update: {},
+    select: { id: true, name: true, workspaceId: true },
+  });
+}
+
+/**
  * Append one run.
  *
  * Two pushes finishing together collide on (workspaceId, sequence). Both are
@@ -169,6 +231,7 @@ export async function POST(request: Request) {
 async function appendRun(input: {
   workspaceId: string;
   authorId: string | null;
+  snapshotId: string | null;
   category: string;
   baselineAt: Date | null;
   agent: string;
@@ -194,8 +257,9 @@ async function appendRun(input: {
           // matter which container it is read from, and a reference a person
           // writes down never becomes ambiguous.
           sequence: (latest?.sequence ?? 0) + 1,
+          snapshotId: input.snapshotId,
           category: input.category,
-          categorySlug: categorySlug(input.category),
+          categorySlug: snapshotSlug(input.category),
           baselineAt: input.baselineAt,
           agent: input.agent,
           root: input.root,
@@ -225,6 +289,7 @@ async function appendRun(input: {
       return {
         id: run.id,
         sequence: run.sequence,
+        snapshotId: run.snapshotId,
         category: run.category,
         categorySlug: run.categorySlug,
         baselineAt: run.baselineAt?.toISOString() ?? null,

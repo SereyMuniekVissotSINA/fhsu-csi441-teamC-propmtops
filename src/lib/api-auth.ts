@@ -189,6 +189,39 @@ export async function requireCallerRun(
   return { caller, role, workspaceId: run.workspaceId };
 }
 
+/**
+ * Assert the caller may act on `snapshotId`, and hand back its workspace.
+ *
+ * Same order and the same 404-not-403 answer as the run and prompt helpers: a
+ * snapshot id nobody can reach is indistinguishable from one that is gone.
+ */
+export async function requireCallerSnapshot(
+  request: Request,
+  snapshotId: string,
+  minimum: WorkspaceRole = "VIEWER",
+): Promise<{ caller: Caller; role: WorkspaceRole; workspaceId: string }> {
+  const caller = await requireCaller(request);
+
+  const snapshot = await prisma.snapshot.findUnique({
+    where: { id: snapshotId },
+    select: { workspaceId: true },
+  });
+  if (!snapshot) throw new AuthzError(404, "Snapshot not found.");
+
+  if (caller.kind === "key") {
+    if (caller.workspaceId !== snapshot.workspaceId) {
+      throw new AuthzError(404, "Snapshot not found.");
+    }
+    if (!atLeast(KEY_ROLE, minimum)) {
+      throw new AuthzError(403, `An API key cannot perform this action; it acts as ${KEY_ROLE}.`);
+    }
+    return { caller, role: KEY_ROLE, workspaceId: snapshot.workspaceId };
+  }
+
+  const { role } = await requireMember(snapshot.workspaceId, minimum);
+  return { caller, role, workspaceId: snapshot.workspaceId };
+}
+
 /** Author for records that keep one optionally — versions, code commits. */
 export function authorIdFor(caller: Caller): string | null {
   return caller.userId;

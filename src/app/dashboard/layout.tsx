@@ -23,6 +23,11 @@ export default async function DashboardLayout({ children }: LayoutProps<"/dashbo
 
           <div className="flex items-center gap-3">
             <Link href="/dashboard/explorer" className="rounded-lg px-3 py-2 text-sm text-emerald-400">Library & graph</Link>
+            {/* Runs are their own page rather than part of a workspace's prompt
+                listing: they belong to the project on someone's disk, not to a
+                prompt. Linked here because `pops push` is otherwise the only
+                way to find out the page exists. */}
+            <Link href="/dashboard/runs" className="rounded-lg px-3 py-2 text-sm text-emerald-400">Agent runs</Link>
             <form action={signOutAction}>
               <button className={action} type="submit">
                 Sign out

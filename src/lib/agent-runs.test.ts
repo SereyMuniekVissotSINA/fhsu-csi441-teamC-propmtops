@@ -3,9 +3,9 @@ import test from "node:test";
 
 import {
   MAX_RUN_FILES,
-  categorySlug,
+  snapshotSlug,
   classifyLocalChanges,
-  cleanCategoryName,
+  cleanSnapshotName,
   describeRestore,
   describeRun,
   parseToolEvents,
@@ -134,22 +134,22 @@ test("tool events are read back best-effort", () => {
 });
 
 test("a category name and its slug are one container", () => {
-  assert.equal(categorySlug("Auth refactor"), "auth-refactor");
-  assert.equal(categorySlug("  AUTH   Refactor  "), "auth-refactor");
-  assert.equal(categorySlug("auth-refactor"), "auth-refactor");
+  assert.equal(snapshotSlug("Auth refactor"), "auth-refactor");
+  assert.equal(snapshotSlug("  AUTH   Refactor  "), "auth-refactor");
+  assert.equal(snapshotSlug("auth-refactor"), "auth-refactor");
   // Punctuation collapses rather than leaving a trailing or doubled dash.
-  assert.equal(categorySlug("fix: the  parser!!"), "fix-the-parser");
-  assert.equal(categorySlug("***"), "");
+  assert.equal(snapshotSlug("fix: the  parser!!"), "fix-the-parser");
+  assert.equal(snapshotSlug("***"), "");
 });
 
 test("a name is tidied, or refused when nothing usable is left", () => {
-  assert.equal(cleanCategoryName("  Auth   refactor "), "Auth refactor");
-  assert.equal(cleanCategoryName(""), null);
-  assert.equal(cleanCategoryName("   "), null);
+  assert.equal(cleanSnapshotName("  Auth   refactor "), "Auth refactor");
+  assert.equal(cleanSnapshotName(""), null);
+  assert.equal(cleanSnapshotName("   "), null);
   // Punctuation only: it would be indistinguishable from any other such name.
-  assert.equal(cleanCategoryName("***"), null);
+  assert.equal(cleanSnapshotName("***"), null);
   // Long names are cut, not rejected, and still slug to something.
-  const long = cleanCategoryName("a".repeat(200));
+  const long = cleanSnapshotName("a".repeat(200));
   assert.equal(long?.length, 60);
-  assert.equal(categorySlug(long!).length, 60);
+  assert.equal(snapshotSlug(long!).length, 60);
 });

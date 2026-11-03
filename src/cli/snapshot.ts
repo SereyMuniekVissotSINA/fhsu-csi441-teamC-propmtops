@@ -11,8 +11,8 @@ import {
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import {
-  categorySlug,
-  cleanCategoryName,
+  snapshotSlug,
+  cleanSnapshotName,
   type LocalFile,
   type RestoreStep,
 } from "@/lib/agent-runs";
@@ -28,10 +28,10 @@ import { CliError } from "./client";
 // `pops snapshot` copies the tree first, the agent does whatever it does, and
 // `pops push` compares.
 //
-// Baselines are kept per category rather than one per directory, so a project
+// Baselines are kept per snapshot rather than one per directory, so a project
 // can carry several lines of work at once: each name holds its own baseline,
-// and switching between them leaves the others untouched. What a category does
-// *not* do is swap the files on disk — categories are several points of
+// and switching between them leaves the others untouched. What a snapshot does
+// *not* do is swap the files on disk — snapshots are several points of
 // comparison over one working tree, not several working copies.
 //
 // Node builtins live here rather than in `src/lib`, because the libraries are
@@ -40,11 +40,11 @@ import { CliError } from "./client";
 export const SNAPSHOT_DIR = ".pops";
 const INDEX_NAME = "index.json";
 const BASELINE_DIR = "baselines";
-// Where a single unnamed baseline lived before categories existed. It is
+// Where a single unnamed baseline lived before snapshots existed. It is
 // adopted on first use rather than abandoned: a baseline is only useful if it
 // survives the upgrade that introduced names for them.
 const LEGACY_NAME = "snapshot.json";
-const LEGACY_CATEGORY = "default";
+const LEGACY_SNAPSHOT = "default";
 
 /**
  * Directories never worth snapshotting: version control, dependencies, and
@@ -82,11 +82,11 @@ const IGNORED_FILES = new Set([".DS_Store", "Thumbs.db"]);
 export const MAX_FILE_BYTES = 256 * 1024;
 export const MAX_SNAPSHOT_FILES = 4000;
 export const MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
-export const MAX_CATEGORIES = 50;
+export const MAX_SNAPSHOTS = 50;
 
-export type Snapshot = {
+export type Baseline = {
   version: 2;
-  /** The category this baseline belongs to, as typed and as slugged. */
+  /** The snapshot this baseline belongs to, as typed and as slugged. */
   name: string;
   slug: string;
   root: string;
@@ -102,19 +102,36 @@ export type Snapshot = {
   skipped: string[];
 };
 
-export type Category = {
+export type Snapshot = {
   name: string;
   slug: string;
   createdAt: string;
-  /** Null until the category has a baseline of its own. */
+  /** Null until the snapshot has a baseline of its own. */
   takenAt: string | null;
   files: number;
+  /**
+   * The branch this baseline belongs to on the server.
+   *
+   * A snapshot is owned by a workspace, so the authority for "which branch is
+   * this?" is a row in the database; what lives here is the local baseline
+   * plus the id that ties it to that row. Null means the server does not know
+   * about it yet — an index written before snapshots moved into the workspace,
+   * or a baseline taken while the app was unreachable — and the next command
+   * that can reach the app fills it in.
+   */
+  snapshotId: string | null;
 };
 
 export type Index = {
-  version: 2;
+  version: 3;
+  /**
+   * Which workspace this project pushes to. Recorded when the snapshot is
+   * created, because a branch cannot be named until its workspace is chosen,
+   * and kept so later commands do not ask again.
+   */
+  workspaceId: string | null;
   active: string | null;
-  categories: Category[];
+  snapshots: Snapshot[];
 };
 
 function popsDir(root: string): string {
@@ -229,16 +246,16 @@ export function collect(root: string): Collected {
 }
 
 // ---------------------------------------------------------------------------
-// The category index
+// The snapshot index
 //
-// One file lists the categories this project knows about and which one is
-// active; each category's baseline is a file of its own. Keeping them apart
-// means switching categories rewrites a pointer rather than a copy of the
-// tree, and a corrupt baseline costs one category rather than all of them.
+// One file lists the snapshots this project knows about and which one is
+// active; each snapshot's baseline is a file of its own. Keeping them apart
+// means switching snapshots rewrites a pointer rather than a copy of the
+// tree, and a corrupt baseline costs one snapshot rather than all of them.
 // ---------------------------------------------------------------------------
 
 function emptyIndex(): Index {
-  return { version: 2, active: null, categories: [] };
+  return { version: 3, workspaceId: null, active: null, snapshots: [] };
 }
 
 function readJsonFile(path: string): unknown {
@@ -249,13 +266,13 @@ function readJsonFile(path: string): unknown {
   }
 }
 
-function writeBaseline(root: string, snapshot: Snapshot): void {
-  const target = baselinePath(root, snapshot.slug);
+function writeBaseline(root: string, baseline: Baseline): void {
+  const target = baselinePath(root, baseline.slug);
   mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, JSON.stringify(snapshot));
+  writeFileSync(target, JSON.stringify(baseline));
 }
 
-/** Adopt a pre-categories baseline as a category called "default". */
+/** Adopt a pre-snapshots baseline as a snapshot called "default". */
 function adoptLegacy(root: string): Index | null {
   const legacy = join(popsDir(root), LEGACY_NAME);
   if (!existsSync(legacy)) return null;
@@ -265,28 +282,30 @@ function adoptLegacy(root: string): Index | null {
   if (!files || typeof files !== "object") return null;
 
   const takenAt = typeof parsed.takenAt === "string" ? parsed.takenAt : new Date().toISOString();
-  const snapshot: Snapshot = {
+  const baseline: Baseline = {
     version: 2,
-    name: LEGACY_CATEGORY,
-    slug: LEGACY_CATEGORY,
+    name: LEGACY_SNAPSHOT,
+    slug: LEGACY_SNAPSHOT,
     root,
     takenAt,
     files: files as Record<string, string>,
     skipped: Array.isArray(parsed.skipped) ? (parsed.skipped as string[]) : [],
   };
-  writeBaseline(root, snapshot);
+  writeBaseline(root, baseline);
   rmSync(legacy, { force: true });
 
   const index: Index = {
-    version: 2,
-    active: LEGACY_CATEGORY,
-    categories: [
+    version: 3,
+    workspaceId: null,
+    active: LEGACY_SNAPSHOT,
+    snapshots: [
       {
-        name: LEGACY_CATEGORY,
-        slug: LEGACY_CATEGORY,
+        name: LEGACY_SNAPSHOT,
+        slug: LEGACY_SNAPSHOT,
         createdAt: takenAt,
         takenAt,
-        files: Object.keys(snapshot.files).length,
+        files: Object.keys(baseline.files).length,
+        snapshotId: null,
       },
     ],
   };
@@ -298,74 +317,128 @@ export function loadIndex(root: string): Index {
   const path = indexPath(root);
   if (!existsSync(path)) return adoptLegacy(root) ?? emptyIndex();
 
-  const parsed = readJsonFile(path) as Partial<Index>;
-  if (!parsed || parsed.version !== 2 || !Array.isArray(parsed.categories)) {
+  const parsed = readJsonFile(path) as Partial<Index> & {
+    version?: number;
+    /** What version 2 called the list, before a snapshot was a branch. */
+    categories?: Snapshot[];
+  };
+
+  // Version 2 is adopted rather than rejected: its baselines are still valid
+  // copies of a tree, they just predate belonging to a workspace. It spelled
+  // the list `categories`, so both keys are read — an index written before the
+  // rename must keep working, because the alternative is telling someone their
+  // four baselines are unreadable when they are sitting right there.
+  const entries = Array.isArray(parsed?.snapshots)
+    ? parsed.snapshots
+    : Array.isArray(parsed?.categories)
+      ? parsed.categories
+      : null;
+
+  if (!parsed || (parsed.version !== 3 && parsed.version !== 2) || !entries) {
     throw new CliError(
       `${path} was written by a different version of pops. Take a fresh baseline with \`pops snapshot\`.`,
     );
   }
+
   return {
-    version: 2,
+    version: 3,
+    workspaceId: typeof parsed.workspaceId === "string" ? parsed.workspaceId : null,
     active: typeof parsed.active === "string" ? parsed.active : null,
-    categories: parsed.categories.filter(
-      (entry): entry is Category => Boolean(entry && typeof entry.slug === "string"),
-    ),
+    snapshots: entries
+      .filter((entry): entry is Snapshot => Boolean(entry && typeof entry.slug === "string"))
+      // A v2 entry has no branch id: nothing on the server knew about it. The
+      // next command that reaches the app registers it under the same name.
+      .map((entry) => ({ ...entry, snapshotId: entry.snapshotId ?? null })),
   };
 }
 
 export function saveIndex(root: string, index: Index): void {
   mkdirSync(popsDir(root), { recursive: true });
   // Readable on purpose: this one is small, and a developer looking into
-  // `.pops` should be able to see which categories exist without a parser.
+  // `.pops` should be able to see which snapshots exist without a parser.
   writeFileSync(indexPath(root), `${JSON.stringify(index, null, 2)}\n`);
 }
 
-export function findCategory(index: Index, needle: string): Category | null {
-  const slug = categorySlug(needle);
-  return index.categories.find((entry) => entry.slug === slug) ?? null;
+/**
+ * Record which workspace this project pushes to.
+ *
+ * Asked once, at `pops snapshot`, because a branch has to belong to a
+ * workspace before it can be named. Changing it later is allowed and simply
+ * means the next push lands elsewhere — the baselines on disk are unaffected,
+ * since they are compared against this machine's files and nothing else.
+ */
+export function setWorkspace(root: string, workspaceId: string): void {
+  const index = loadIndex(root);
+  index.workspaceId = workspaceId;
+  saveIndex(root, index);
 }
 
-export function activeCategory(root: string): Category | null {
-  const index = loadIndex(root);
-  return index.categories.find((entry) => entry.slug === index.active) ?? null;
+export function storedWorkspace(root: string): string | null {
+  return existsSync(indexPath(root)) ? loadIndex(root).workspaceId : null;
 }
 
 /**
- * Which category a command acts on: the one named, or the active one.
+ * Tie a local baseline to the branch the server created for it.
+ *
+ * Kept separate from taking the baseline so the two can fail independently:
+ * the copy of the tree is what a push diffs against and is worth having even
+ * if the app was unreachable when it was taken, and the id can be filled in
+ * afterwards by any command that does reach it.
+ */
+export function linkSnapshot(root: string, slug: string, snapshotId: string): void {
+  const index = loadIndex(root);
+  const entry = index.snapshots.find((candidate) => candidate.slug === slug);
+  if (!entry) return;
+  entry.snapshotId = snapshotId;
+  saveIndex(root, index);
+}
+
+export function findSnapshot(index: Index, needle: string): Snapshot | null {
+  const slug = snapshotSlug(needle);
+  return index.snapshots.find((entry) => entry.slug === slug) ?? null;
+}
+
+export function activeSnapshot(root: string): Snapshot | null {
+  const index = loadIndex(root);
+  return index.snapshots.find((entry) => entry.slug === index.active) ?? null;
+}
+
+/**
+ * Which snapshot a command acts on: the one named, or the active one.
  *
  * A name that does not exist is an error rather than a silent creation —
- * `pops push --category typo` quietly opening an empty container would be
+ * `pops push --snapshot typo` quietly opening an empty container would be
  * worse than being told the name is unknown.
  */
-export function requireCategory(root: string, named?: string): Category {
+export function requireSnapshot(root: string, named?: string): Snapshot {
   const index = loadIndex(root);
 
   if (named) {
-    const found = findCategory(index, named);
+    const found = findSnapshot(index, named);
     if (found) return found;
-    const known = index.categories.map((entry) => entry.name).join(", ") || "none yet";
+    const known = index.snapshots.map((entry) => entry.name).join(", ") || "none yet";
     throw new CliError(
-      `No snapshot category "${named}" in ${root}.\n` +
+      `No snapshot "${named}" in ${root}.\n` +
         `  This project has: ${known}.\n` +
         `  Start one with \`pops snapshot "${named}"\`.`,
     );
   }
 
-  const active = index.categories.find((entry) => entry.slug === index.active);
+  const active = index.snapshots.find((entry) => entry.slug === index.active);
   if (active) return active;
 
   throw new CliError(
-    `No snapshot category chosen for ${root}.\n` +
+    `No snapshot chosen for ${root}.\n` +
       "Run `pops snapshot` before the agent works, and name the snapshot when asked.",
   );
 }
 
 /**
- * Create a category if the name is new, without changing which one is active.
+ * Create a snapshot if the name is new, without changing which one is active.
  * Returns the entry and whether it had to be created.
  */
-function ensureCategory(root: string, rawName: string): { category: Category; created: boolean } {
-  const name = cleanCategoryName(rawName);
+function ensureSnapshot(root: string, rawName: string): { snapshot: Snapshot; created: boolean } {
+  const name = cleanSnapshotName(rawName);
   if (!name) {
     throw new CliError(
       `"${rawName}" is not a usable snapshot name. Use letters or numbers, like "auth refactor".`,
@@ -373,64 +446,65 @@ function ensureCategory(root: string, rawName: string): { category: Category; cr
   }
 
   const index = loadIndex(root);
-  const slug = categorySlug(name);
-  const existing = index.categories.find((entry) => entry.slug === slug);
-  if (existing) return { category: existing, created: false };
+  const slug = snapshotSlug(name);
+  const existing = index.snapshots.find((entry) => entry.slug === slug);
+  if (existing) return { snapshot: existing, created: false };
 
-  if (index.categories.length >= MAX_CATEGORIES) {
+  if (index.snapshots.length >= MAX_SNAPSHOTS) {
     throw new CliError(
-      `${root} already has ${MAX_CATEGORIES} snapshot categories. Prune ${indexPath(root)} first.`,
+      `${root} already has ${MAX_SNAPSHOTS} snapshots. Prune ${indexPath(root)} first.`,
     );
   }
 
-  const category: Category = {
+  const snapshot: Snapshot = {
     name,
     slug,
     createdAt: new Date().toISOString(),
     takenAt: null,
     files: 0,
+    snapshotId: null,
   };
-  index.categories.push(category);
+  index.snapshots.push(snapshot);
   saveIndex(root, index);
-  return { category, created: true };
+  return { snapshot, created: true };
 }
 
 /**
- * Create the category if it is new, and make it the one later commands act on
+ * Create the snapshot if it is new, and make it the one later commands act on
  * when none is named.
  */
-export function switchCategory(
+export function switchSnapshot(
   root: string,
   rawName: string,
-): { category: Category; created: boolean } {
-  const result = ensureCategory(root, rawName);
+): { snapshot: Snapshot; created: boolean } {
+  const result = ensureSnapshot(root, rawName);
   const index = loadIndex(root);
-  index.active = result.category.slug;
+  index.active = result.snapshot.slug;
   saveIndex(root, index);
   return result;
 }
 
 /** The name to offer when asking the user to name a snapshot. */
 export function suggestedName(root: string): string {
-  return activeCategory(root)?.name ?? cleanCategoryName(basename(root)) ?? "default";
+  return activeSnapshot(root)?.name ?? cleanSnapshotName(basename(root)) ?? "default";
 }
 
 // ---------------------------------------------------------------------------
 // Baselines
 // ---------------------------------------------------------------------------
 
-/** Take a baseline for one category, replacing whatever that name held. */
+/** Take a baseline for one snapshot, replacing whatever that name held. */
 export function takeSnapshot(
   root: string,
   rawName: string,
   { makeActive = true }: { makeActive?: boolean } = {},
-): { snapshot: Snapshot; category: Category; created: boolean } {
+): { baseline: Baseline; snapshot: Snapshot; created: boolean } {
   // `makeActive` is false where the baseline moves as a side effect — after a
-  // push or a restore that named `--category` — so a one-off override stays a
-  // one-off rather than quietly becoming the new working category.
-  const { category, created } = makeActive
-    ? switchCategory(root, rawName)
-    : ensureCategory(root, rawName);
+  // push or a restore that named `--snapshot` — so a one-off override stays a
+  // one-off rather than quietly becoming the new working snapshot.
+  const { snapshot, created } = makeActive
+    ? switchSnapshot(root, rawName)
+    : ensureSnapshot(root, rawName);
   const { files, skipped, truncated } = collect(root);
   if (truncated) {
     throw new CliError(
@@ -441,36 +515,75 @@ export function takeSnapshot(
     );
   }
 
-  const snapshot: Snapshot = {
+  const baseline: Baseline = {
     version: 2,
-    name: category.name,
-    slug: category.slug,
+    name: snapshot.name,
+    slug: snapshot.slug,
     root,
     takenAt: new Date().toISOString(),
     files: Object.fromEntries(files),
     skipped: skipped.sort(),
   };
-  writeBaseline(root, snapshot);
+  writeBaseline(root, baseline);
 
-  // Re-read rather than mutate the copy above: the category was written to the
+  // Re-read rather than mutate the copy above: the snapshot was written to the
   // index a moment ago, and writing a stale object back would drop that.
   const index = loadIndex(root);
-  const entry = index.categories.find((candidate) => candidate.slug === category.slug);
+  const entry = index.snapshots.find((candidate) => candidate.slug === snapshot.slug);
   if (entry) {
-    entry.takenAt = snapshot.takenAt;
+    entry.takenAt = baseline.takenAt;
     entry.files = files.size;
   }
-  if (makeActive) index.active = category.slug;
+  if (makeActive) index.active = snapshot.slug;
   saveIndex(root, index);
 
-  return { snapshot, category: entry ?? category, created };
+  return { baseline, snapshot: entry ?? snapshot, created };
 }
 
-export function loadBaseline(root: string, slug: string): Snapshot | null {
+/**
+ * Forget a snapshot: its baseline copy and its entry in the index.
+ *
+ * Local only, and deliberately so. Runs already pushed under this name are a
+ * record of what an agent did and stay in the log — a baseline is the thing
+ * that says "compare against here", and deleting one only means this project
+ * stops tracking that line of work.
+ *
+ * What is actually lost is the pre-run contents of files not yet pushed, which
+ * is why the caller asks first.
+ */
+export function forgetSnapshot(
+  root: string,
+  named: string,
+): { snapshot: Snapshot; hadBaseline: boolean; remaining: Snapshot[] } {
+  const index = loadIndex(root);
+  const snapshot = findSnapshot(index, named);
+  if (!snapshot) {
+    const known = index.snapshots.map((entry) => entry.name).join(", ") || "none yet";
+    throw new CliError(
+      `No snapshot "${named}" in ${root}.\n  This project has: ${known}.`,
+    );
+  }
+
+  const baseline = baselinePath(root, snapshot.slug);
+  const hadBaseline = existsSync(baseline);
+  rmSync(baseline, { force: true });
+
+  index.snapshots = index.snapshots.filter((entry) => entry.slug !== snapshot.slug);
+  // Nothing is promoted in its place. Which of the remaining names should
+  // become the working one is not something this command can know, and
+  // guessing would have the next `pops push` measure against a baseline the
+  // developer did not choose; `pops status` says so plainly instead.
+  if (index.active === snapshot.slug) index.active = null;
+  saveIndex(root, index);
+
+  return { snapshot, hadBaseline, remaining: index.snapshots };
+}
+
+export function loadBaseline(root: string, slug: string): Baseline | null {
   const target = baselinePath(root, slug);
   if (!existsSync(target)) return null;
 
-  const parsed = readJsonFile(target) as Partial<Snapshot>;
+  const parsed = readJsonFile(target) as Partial<Baseline>;
   if (!parsed || parsed.version !== 2 || typeof parsed.files !== "object" || parsed.files === null) {
     throw new CliError(
       `${target} was written by a different version of pops. Take a fresh baseline with \`pops snapshot\`.`,
@@ -493,60 +606,60 @@ export function loadBaseline(root: string, slug: string): Snapshot | null {
  * Paths either side left untracked are excluded from both, so a 4 MB asset or a
  * binary never shows up as a change it is not possible to restore.
  */
-export function compare(snapshot: Snapshot, current: Collected): LocalFile[] {
-  const untracked = new Set([...snapshot.skipped, ...current.skipped]);
+export function compare(baseline: Baseline, current: Collected): LocalFile[] {
+  const untracked = new Set([...baseline.skipped, ...current.skipped]);
   const changes: LocalFile[] = [];
 
   for (const [path, after] of current.files) {
     if (untracked.has(path)) continue;
-    const before = Object.prototype.hasOwnProperty.call(snapshot.files, path)
-      ? snapshot.files[path]
+    const before = Object.prototype.hasOwnProperty.call(baseline.files, path)
+      ? baseline.files[path]
       : null;
     if (before === after) continue;
     changes.push({ path, before, after });
   }
 
-  for (const path of Object.keys(snapshot.files)) {
+  for (const path of Object.keys(baseline.files)) {
     if (untracked.has(path) || current.files.has(path)) continue;
-    changes.push({ path, before: snapshot.files[path], after: null });
+    changes.push({ path, before: baseline.files[path], after: null });
   }
 
   return changes.sort((left, right) => left.path.localeCompare(right.path));
 }
 
-/** What changed under `root` since one category's baseline. */
+/** What changed under `root` since one snapshot's baseline. */
 export function localChanges(
   root: string,
   named?: string,
-): { category: Category; snapshot: Snapshot; changes: LocalFile[] } {
-  const category = requireCategory(root, named);
-  const snapshot = loadBaseline(root, category.slug);
-  if (!snapshot) {
+): { snapshot: Snapshot; baseline: Baseline; changes: LocalFile[] } {
+  const snapshot = requireSnapshot(root, named);
+  const baseline = loadBaseline(root, snapshot.slug);
+  if (!baseline) {
     throw new CliError(
-      `"${category.name}" has no baseline yet in ${root}.\n` +
-        `Run \`pops snapshot "${category.name}"\` before the agent works, so there is a before to compare against.`,
+      `"${snapshot.name}" has no baseline yet in ${root}.\n` +
+        `Run \`pops snapshot "${snapshot.name}"\` before the agent works, so there is a before to compare against.`,
     );
   }
-  return { category, snapshot, changes: compare(snapshot, collect(root)) };
+  return { snapshot, baseline, changes: compare(baseline, collect(root)) };
 }
 
 /**
- * Every category, with how far its baseline has drifted from the tree.
+ * Every snapshot, with how far its baseline has drifted from the tree.
  *
  * The tree is walked once and compared against each baseline: the point of the
  * listing is to answer "where am I, and what is outstanding elsewhere?" in one
- * pass, and categories share one working tree.
+ * pass, and snapshots share one working tree.
  */
-export function summariseCategories(
+export function summariseSnapshots(
   root: string,
-): { index: Index; rows: (Category & { changed: number | null })[] } {
+): { index: Index; rows: (Snapshot & { changed: number | null })[] } {
   const index = loadIndex(root);
-  const current = index.categories.some((entry) => entry.takenAt) ? collect(root) : null;
+  const current = index.snapshots.some((entry) => entry.takenAt) ? collect(root) : null;
 
-  const rows = index.categories.map((entry) => {
+  const rows = index.snapshots.map((entry) => {
     if (!current || !entry.takenAt) return { ...entry, changed: null };
-    const snapshot = loadBaseline(root, entry.slug);
-    return { ...entry, changed: snapshot ? compare(snapshot, current).length : null };
+    const baseline = loadBaseline(root, entry.slug);
+    return { ...entry, changed: baseline ? compare(baseline, current).length : null };
   });
 
   return { index, rows };
