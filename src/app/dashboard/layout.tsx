@@ -28,6 +28,9 @@ export default async function DashboardLayout({ children }: LayoutProps<"/dashbo
                 prompt. Linked here because `pops push` is otherwise the only
                 way to find out the page exists. */}
             <Link href="/dashboard/runs" className="rounded-lg px-3 py-2 text-sm text-emerald-400">Agent runs</Link>
+            {/* Aggregates the generation history the prompt pages write, so it
+                belongs beside them rather than inside any one prompt. */}
+            <Link href="/dashboard/analytics" className="rounded-lg px-3 py-2 text-sm text-emerald-400">Analytics</Link>
             <form action={signOutAction}>
               <button className={action} type="submit">
                 Sign out
