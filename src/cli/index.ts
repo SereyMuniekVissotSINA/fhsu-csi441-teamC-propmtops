@@ -5,7 +5,6 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import {
-  type AgentChange,
   UNFILED,
   classifyLocalChanges,
   describeRestore,
@@ -29,6 +28,7 @@ import {
 import { changeCount, paint, paintChange, renderDiff, table, truncate, when } from "./format";
 import { matchKey, matchPrompt, parseRange, parseRef, parseVariables } from "./resolve";
 import { askPassword, passwordSignIn } from "./session";
+import { startShell } from "./shell";
 import {
   activeSnapshot,
   applyRestore,
@@ -41,6 +41,17 @@ import {
   summariseSnapshots,
   takeSnapshot,
 } from "./snapshot";
+import type {
+  Commit,
+  KeyRecord,
+  PromptDetail,
+  PromptSummary,
+  RunDetail,
+  RunSummary,
+  ServerSnapshot,
+  WhoAmI,
+  Workspace,
+} from "./types";
 
 // `pops` — the command-line client for Prompt Ops.
 //
@@ -57,6 +68,7 @@ import {
 const HELP = `pops — Prompt Ops from the terminal
 
 Usage
+  pops                          Open the Prompt OPS shell, if this is a terminal
   pops <command> [options]
 
 Workflow
@@ -85,6 +97,12 @@ Snapshots and agent runs
   push --prompt "…"             Record the diff as a run  (--agent, --snapshot)
   restore <r7>                  Put a run's pre-run files back  (--yes)
   restore --watch --yes         Apply restores asked for on the website
+
+The shell
+  shell                         Browse a workspace the way psql browses a
+                                database: \\l for workspaces, \\c to connect,
+                                \\d for a prompt, \\x to turn a row on its side.
+                                Typing a command above into it works too.
 
 Authentication
   auth login --email you@…      Sign in with your password, for the keys commands
@@ -209,15 +227,25 @@ async function main(argv: string[]): Promise<number> {
   });
 
   const [command, ...rest] = positionals;
+  const options = values as unknown as Options & { help: boolean };
+
+  // `pops` on its own opens the shell, because a terminal with nothing asked of
+  // it is someone looking around rather than someone running a command. Piped
+  // or scripted there is nobody to look, so the help text stays the answer.
+  if (!values.help && !command && process.stdin.isTTY && process.stdout.isTTY) {
+    return shell(options);
+  }
   if (values.help || !command || command === "help") {
     console.log(HELP);
     return 0;
   }
 
-  const options = values as unknown as Options & { help: boolean };
   const client = () => createClient({ url: options.url, key: options.key });
 
   switch (command) {
+    case "shell":
+    case "console":
+      return shell(options);
     case "auth":
       return auth(rest, options);
     case "keys":
@@ -259,6 +287,23 @@ async function main(argv: string[]): Promise<number> {
     default:
       throw new CliError(`Unknown command "${command}". Run \`pops help\` for the list.`);
   }
+}
+
+/**
+ * The interactive shell.
+ *
+ * Handed `main` as its dispatcher, so a command typed at its prompt is parsed
+ * and run by exactly the code above — the shell browses, it does not
+ * reimplement. `--url`, `--key`, `--workspace` and `--root` carry into it.
+ */
+function shell(options: Options): Promise<number> {
+  return startShell({
+    dispatch: main,
+    help: HELP,
+    overrides: { url: options.url, key: options.key },
+    workspace: options.workspace,
+    root: options.root,
+  });
 }
 
 // --- authentication ---------------------------------------------------------
@@ -350,15 +395,6 @@ async function login(options: Options): Promise<number> {
 }
 
 // --- API keys ---------------------------------------------------------------
-
-type KeyRecord = {
-  id: string;
-  name: string;
-  prefix: string;
-  lastUsedAt: string | null;
-  revokedAt: string | null;
-  createdAt: string;
-};
 
 async function keys(args: string[], options: Options): Promise<number> {
   const [action = "list", ...rest] = args;
@@ -519,13 +555,6 @@ async function keysRevoke(
 
 // --- reading ----------------------------------------------------------------
 
-type WhoAmI = {
-  authenticatedAs: string;
-  user: { name: string | null; email: string } | null;
-  key?: { name: string; prefix: string; lastUsedAt: string | null } | null;
-  workspaces: { role: string; workspace: { id: string; name: string; slug: string } }[];
-};
-
 async function whoami(client: Client, options: Options): Promise<number> {
   const me = await client.request<WhoAmI>("/api/me");
   if (options.json) return print(me);
@@ -549,14 +578,6 @@ async function whoami(client: Client, options: Options): Promise<number> {
   return 0;
 }
 
-type Workspace = {
-  id: string;
-  name: string;
-  slug: string;
-  _count: { prompts: number };
-  members: { role: string; user: { name: string | null; email: string } }[];
-};
-
 async function workspaces(client: Client, options: Options): Promise<number> {
   const list = await client.request<Workspace[]>("/api/workspaces");
   if (options.json) return print(list);
@@ -575,15 +596,6 @@ async function workspaces(client: Client, options: Options): Promise<number> {
   );
   return 0;
 }
-
-type PromptSummary = {
-  id: string;
-  title: string;
-  updatedAt: string;
-  workspace: { name: string; slug: string };
-  versions: { body: string; tags: string }[];
-  _count: { versions: number };
-};
 
 async function fetchPrompts(client: Client, options: Options): Promise<PromptSummary[]> {
   if (!options.workspace) return client.request<PromptSummary[]>("/api/prompts");
@@ -619,21 +631,6 @@ async function prompts(client: Client, options: Options): Promise<number> {
   );
   return 0;
 }
-
-type PromptDetail = {
-  id: string;
-  title: string;
-  workspace: { name: string; slug: string };
-  versions: {
-    id: string;
-    title: string;
-    body: string;
-    tags: string;
-    note: string;
-    createdAt: string;
-    author: { name: string | null } | null;
-  }[];
-};
 
 /** Resolve what the user typed to one prompt, then fetch it in full. */
 async function locate(client: Client, needle: string | undefined, options: Options) {
@@ -844,34 +841,6 @@ async function run(client: Client, needle: string | undefined, options: Options)
   return 0;
 }
 
-type CommitFile = {
-  path: string;
-  hash: string;
-  language: string;
-  change: string;
-  added: number;
-  removed: number;
-  content?: string;
-};
-
-type Commit = {
-  id: string;
-  sequence: number;
-  message: string;
-  parentId: string | null;
-  model: string;
-  elapsedMs: number;
-  inputTokens: number | null;
-  outputTokens: number | null;
-  incomplete: boolean;
-  createdAt: string;
-  authorName: string | null;
-  stats: { files: number; added: number; removed: number; changed: number };
-  files: CommitFile[];
-  input?: string;
-  output?: string;
-};
-
 async function generate(
   client: Client,
   needle: string | undefined,
@@ -1036,49 +1005,6 @@ async function commit(
 // keeps is the branch and its runs; the baseline — the copy of the tree a push
 // diffs against — stays in `.pops/`, because it is only ever compared against
 // this machine's files.
-
-type RunFileSummary = {
-  path: string;
-  language: string;
-  change: AgentChange;
-  added: number;
-  removed: number;
-};
-
-type RunSummary = {
-  id: string;
-  sequence: number;
-  workspace?: { id: string; name: string; slug: string };
-  snapshotId: string | null;
-  category: string;
-  categorySlug: string;
-  agent: string;
-  root: string;
-  prompt: string;
-  summary: string;
-  stats: { files: number; added: number; removed: number };
-  authorName: string | null;
-  restoreRequestedAt: string | null;
-  restoredAt: string | null;
-  createdAt: string;
-  files: RunFileSummary[];
-};
-
-type RunDetail = RunSummary & {
-  response: string;
-  files: (RunFileSummary & { before: string; after: string })[];
-};
-
-/** A branch as the server holds it. */
-type ServerSnapshot = {
-  id: string;
-  name: string;
-  slug: string;
-  runs: number;
-  baselinedAt: string | null;
-  archivedAt: string | null;
-  createdAt: string;
-};
 
 /** Where the commands act: `--root`, or the directory the CLI was run from. */
 function projectRoot(options: Options): string {

@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { maskKey, stripTrailingSlash } from "./config";
-import { changeCount, changeLetter, table, truncate } from "./format";
+import { box, changeCount, changeLetter, records, table, truncate } from "./format";
 import { matchKey, matchPrompt, parseRange, parseRef, parseVariables } from "./resolve";
 import { absorb, cookieHeader, hasSessionCookie, type Jar } from "./session";
+import { tokenize } from "./shell";
 
 const prompts = [
   { id: "cmv9v5hgw0005vnj597ysm0x9", title: "Slugify helper" },
@@ -158,4 +159,73 @@ test("the cookie jar keeps values, drops attributes, and honours clearing", () =
 test("a chunked or secure session cookie still counts as a session", () => {
   const chunked: Jar = absorb(new Map(), ["__Secure-authjs.session-token.0=head"]);
   assert.equal(hasSessionCookie(chunked), true);
+});
+
+// --- the shell --------------------------------------------------------------
+
+test("a result set is rendered the way a database client renders one", () => {
+  const rendered = box(
+    [{ name: "Slug" }, { name: "Name" }, { name: "Prompts", align: "right" }],
+    [
+      ["csi441", "Team C", "12"],
+      ["scratch", "Scratch pad", "3"],
+    ],
+    "Workspaces",
+  ).split("\n");
+
+  // Centred headers, a `+`-jointed rule, and the row count underneath.
+  assert.equal(rendered[1], "  Slug   |    Name     | Prompts");
+  assert.equal(rendered[2], "---------+-------------+---------");
+  assert.equal(rendered[3], " csi441  | Team C      |      12");
+  assert.equal(rendered.at(-1), "(2 rows)");
+  assert.ok(rendered[0].includes("Workspaces"));
+});
+
+test("an empty result set still says so", () => {
+  const rendered = box([{ name: "Slug" }], []);
+  assert.equal(rendered.split("\n").at(-1), "(0 rows)");
+  assert.equal(records([{ name: "Slug" }], []), "(0 rows)");
+});
+
+test("expanded output puts one field per line, and indents a wrapped value", () => {
+  const rendered = records(
+    [{ name: "Field" }, { name: "Value" }],
+    [["note", "first line\nsecond line"]],
+  ).split("\n");
+
+  assert.match(rendered[0], /^-\[ RECORD 1 \]-+$/);
+  assert.equal(rendered[1], "Field | note");
+  assert.equal(rendered[2], "Value | first line");
+  // The continuation lines up under the value, as psql does, rather than
+  // starting at the left margin where it would read as another field.
+  assert.equal(rendered[3], "      | second line");
+});
+
+test("a typed line splits like a shell, and quotes group words", () => {
+  assert.deepEqual(tokenize("\\dp").tokens, ["\\dp"]);
+  assert.deepEqual(tokenize("  show   slugify  ").tokens, ["show", "slugify"]);
+  assert.deepEqual(tokenize('show "Center a div"').tokens, ["show", "Center a div"]);
+  assert.deepEqual(tokenize("run x -v name=Alex").tokens, ["run", "x", "-v", "name=Alex"]);
+  // An empty argument is a real argument: `--tags ""` clears the tags.
+  assert.deepEqual(tokenize('edit x --tags ""').tokens, ["edit", "x", "--tags", ""]);
+  // Double quotes take escapes; single quotes keep the backslash, so a Windows
+  // path survives being pasted in.
+  assert.deepEqual(tokenize('new --title "a \\"quoted\\" one"').tokens, [
+    "new",
+    "--title",
+    'a "quoted" one',
+  ]);
+  assert.deepEqual(tokenize("push --root 'C:\\work'").tokens, ["push", "--root", "C:\\work"]);
+});
+
+test("an unclosed quote is reported, so the shell can keep reading", () => {
+  const open = tokenize('new --body "first paragraph');
+  assert.equal(open.open, true);
+
+  // What the shell does next: join the lines and try again. The newline stays
+  // inside the quoted argument, which is how a multi-line body gets typed.
+  const closed = tokenize('new --body "first paragraph\nsecond paragraph"');
+  assert.equal(closed.open, false);
+  assert.deepEqual(closed.tokens, ["new", "--body", "first paragraph\nsecond paragraph"]);
+  assert.deepEqual(tokenize("").tokens, []);
 });
