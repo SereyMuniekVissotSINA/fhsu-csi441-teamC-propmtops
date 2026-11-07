@@ -294,6 +294,80 @@ jq` works. Colour follows `NO_COLOR` and switches off when output is piped.
 `run` and `generate` reach a model, so they need the app in development mode
 with a provider configured — the same restriction the browser has.
 
+### The shell
+
+`pops` with no arguments opens **Prompt OPS**, an interactive session built the
+way a database client is, because the job is the same: a workspace holds
+prompts, a prompt holds an append-only history of versions, and a version holds
+the commits of code it generated. So `psql`'s conventions are borrowed outright
+— the workspace you are connected to is in the prompt, backslash commands
+describe one thing each, and `\x` turns a row on its side when it carries more
+fields than the terminal is wide.
+
+```
+$ bun run pops
+Prompt OPS 0.1.0 — prompts, their versions, and the code they generated
+Connected to http://localhost:3000
+Workspace "csi441" (Team C) as owner.
+Type \? for the backslash commands, \h for the pops reference, \q to quit.
+
+csi441=# \dp
+                           Prompts in "csi441"
+    Id    |      Title       | Versions | Variables |       Updated
+----------+------------------+----------+-----------+----------------------
+ cmw5yyf8 | Release notes    |        4 |         2 | 11/06/2026, 11:34 PM
+(1 row)
+
+csi441=# \d "Release notes"
+              Prompt "Release notes"
+   Field   |                  Value
+-----------+------------------------------------------
+ id        | cmw5yyf8y000093j5uh30jxc3
+ workspace | csi441 (Team C)
+ versions  | 4 (v1..v4)
+ variables | {{version}} {{highlights}}
+ ...
+```
+
+The prompt itself reports where you are and what you can do there: `csi441=#`
+when you own the workspace, `csi441=>` when you are an editor or a viewer —
+the distinction psql draws between a superuser and everyone else, and the one
+that decides whether `\dk` and the `keys` commands will work for you.
+
+| Command | What it shows |
+| --- | --- |
+| `\l[+]` | Workspaces you can reach, your role in each, with `*` on the connected one |
+| `\c <slug>` | Connect to another workspace |
+| `\conninfo` | App, credential, who writes are attributed to, role, project directory |
+| `\du` / `\dk` | Members and their roles; API keys, with `*` on the one in use |
+| `\dp[+] [pattern]` | Prompts, with their version and variable counts |
+| `\d <prompt>` | One prompt in full: fields, variables, every version, every code commit |
+| `\dv <prompt> [vN]` | Version history, or one version's fields |
+| `\sv <prompt> [vN]` | Print a version's body |
+| `\dc <prompt> [cN]` | Code commits, or one commit and its files |
+| `\ds[+]` | Snapshots in the workspace, merged with this machine's baselines and drift |
+| `\dr [rN]` | Agent runs, or one run with its files and restore state |
+| `\x` / `\timing` | Expanded output; time every command |
+| `\?` / `\h` / `\q` | Backslash commands; the `pops` reference; quit (so does `^D`) |
+
+A line without a leading backslash is an ordinary `pops` command, parsed and run
+by the same code as outside — so `prompts`, `edit slugify --body "…"`, `status
+--diff` and `push --prompt "…"` all work at the prompt, and the shell cannot
+drift away from the commands it is hosting. The one thing it adds is the
+connection: the workspace you are in is passed to every command that takes one,
+so you stop typing `--workspace` on each.
+
+The rest is the terminal behaviour you would expect of a client like this: tab
+completion over commands, workspace slugs and prompt titles; history kept
+between sessions in `~/.config/promptops/history`, with any line carrying a key
+left out of it; `^C` to abandon a half-typed line and `^D` to leave; and an
+unclosed quote continuing on the next line (`csi441-#`), which is how a prompt
+body with paragraphs in it gets typed in the first place.
+
+Scripts are unaffected: with output piped or no terminal attached, bare `pops`
+still prints the help text rather than opening a session nobody can see. `pops
+shell` opens it explicitly.
+
 ### Token usage and observed savings (report UC-7 / UC-8)
 
 Open an authenticated prompt and click **Token usage & savings**. Every workspace
@@ -405,7 +479,7 @@ permission. It never resets or seeds the application's tables or calls an LLM.
 | `bun run dev` | Dev server |
 | `bun run build` | `prisma generate` + production build |
 | `bun run start` | Serve the production build |
-| `bun run pops` | The CLI (`bun run pops help`) |
+| `bun run pops` | The CLI (`bun run pops help`), or the Prompt OPS shell with no arguments |
 | `bun run lint` | ESLint |
 | `bun run typecheck` | `tsc --noEmit` |
 | `bun run test` | Pure-logic suites (`node:test`) |
@@ -442,11 +516,13 @@ src/
     index.ts           `prompt-ops` MCP server for Copilot Chat (stdio)
   cli/
     index.ts           `pops` — commands and help
+    shell.ts           Prompt OPS — the interactive, psql-shaped session
     client.ts          HTTP layer, bearer key or session cookie, error mapping
     config.ts          ~/.config/promptops/config.json
     session.ts         Password sign-in through Auth.js, for the owner-only routes
-    format.ts          Tables, diffs, colour
+    format.ts          Tables, result sets, diffs, colour
     resolve.ts         Name a prompt by id, prefix, or title — or a key
+    types.ts           The API shapes the commands and the shell share
   lib/
     api-auth.ts        Session or API key: one caller model for every route
     prompts-core.ts    Pure prompt helpers + sample data, shared by app/CLI/seed
