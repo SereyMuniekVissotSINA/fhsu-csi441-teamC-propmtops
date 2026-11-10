@@ -6,7 +6,7 @@
     "pops": "./src/cli/index.ts"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "prisma generate && next dev",
     "build": "prisma generate && next build",
     "start": "next start",
     "pops": "bun src/cli/index.ts",
