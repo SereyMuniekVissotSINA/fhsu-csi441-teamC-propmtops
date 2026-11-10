@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { authRedirect } from "@/lib/auth-redirect";
 import { auth } from "@/auth";
 import { BackendUnavailable } from "@/components/backend-unavailable";
 import { isAuthReady } from "@/lib/backend-status";
@@ -13,12 +14,13 @@ export const metadata: Metadata = {
   title: "Create an account | PromptOps",
 };
 
-export default async function RegisterPage() {
+export default async function RegisterPage({ searchParams }: PageProps<"/register">) {
+  const target = authRedirect((await searchParams).next);
   if (!(await isAuthReady()))
     return <BackendUnavailable what="Creating an account" />;
 
   const session = await auth();
-  if (session?.user) redirect("/dashboard");
+  if (session?.user) redirect(target);
 
   return (
     <main className={`${page} flex flex-col items-center justify-center px-6 py-16`}>
@@ -36,7 +38,7 @@ export default async function RegisterPage() {
             You will get a personal workspace to start from.
           </p>
 
-          <RegisterForm />
+          <RegisterForm next={target} />
         </div>
       </div>
     </main>

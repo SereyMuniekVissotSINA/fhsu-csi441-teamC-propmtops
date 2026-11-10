@@ -25,7 +25,13 @@ export const authConfig = {
     },
     authorized({ auth, request }) {
       const isLoggedIn = Boolean(auth?.user);
-      const isOnProtected = request.nextUrl.pathname.startsWith("/dashboard");
+      const path = request.nextUrl.pathname;
+      const isOnProtected = path === "/dashboard" || path.startsWith("/dashboard/");
+      if (isOnProtected && !isLoggedIn) {
+        const login = new URL("/login", request.nextUrl);
+        login.searchParams.set("next", path + request.nextUrl.search);
+        return Response.redirect(login);
+      }
 
       if (isOnProtected) return isLoggedIn;
       return true;

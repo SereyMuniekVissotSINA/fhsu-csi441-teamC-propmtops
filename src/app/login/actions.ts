@@ -2,6 +2,7 @@
 
 import { AuthError } from "next-auth";
 
+import { authRedirect } from "@/lib/auth-redirect";
 import { signIn } from "@/auth";
 import { loginSchema } from "@/lib/validations";
 
@@ -22,7 +23,7 @@ export async function loginAction(
     return { error: "Enter a valid email and a password of at least 8 characters." };
   }
 
-  const next = String(formData.get("next") || "/dashboard");
+  const next = authRedirect(formData.get("next"));
 
   try {
     // `redirectTo` makes NextAuth throw a redirect on success, which Next
@@ -42,6 +43,6 @@ export async function loginAction(
 
 export async function oauthSignInAction(formData: FormData) {
   const provider = String(formData.get("provider"));
-  const next = String(formData.get("next") || "/dashboard");
+  const next = authRedirect(formData.get("next"));
   await signIn(provider, { redirectTo: next });
 }
