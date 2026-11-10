@@ -7,7 +7,7 @@ import { useState } from "react";
 import { field, primary } from "@/lib/ui";
 import { registerSchema } from "@/lib/validations";
 
-export function RegisterForm() {
+export function RegisterForm({ next }: { next: string }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -45,11 +45,17 @@ export function RegisterForm() {
       }
 
       // Registering should leave you signed in, not back at the login page.
-      await signIn("credentials", {
+      const result = await signIn("credentials", {
         email: parsed.data.email,
         password: parsed.data.password,
-        redirectTo: "/dashboard",
+        redirect: false,
+        redirectTo: next,
       });
+      if (result?.error) {
+        setError("Account created. Please sign in using the link below.");
+        return;
+      }
+      window.location.assign(next);
     } catch {
       setError("Could not reach the server. Is it still running?");
     } finally {
@@ -116,7 +122,7 @@ export function RegisterForm() {
 
       <p className="text-center text-sm text-zinc-400">
         Already have an account?{" "}
-        <Link className="text-emerald-400 hover:underline" href="/login">
+        <Link className="text-emerald-400 hover:underline" href={`/login?next=${encodeURIComponent(next)}`}>
           Sign in
         </Link>
       </p>

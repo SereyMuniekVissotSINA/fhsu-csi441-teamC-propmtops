@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { authRedirect } from "@/lib/auth-redirect";
 import { auth } from "@/auth";
 import { BackendUnavailable } from "@/components/backend-unavailable";
 import { configuredOAuthProviders } from "@/lib/auth-providers";
@@ -20,8 +21,8 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   // can only mislead. Say so instead of throwing.
   if (!(await isAuthReady())) return <BackendUnavailable what="Signing in" />;
 
-  const { next } = await searchParams;
-  const target = typeof next === "string" && next.startsWith("/") ? next : "/dashboard";
+  const { next, callbackUrl } = await searchParams;
+  const target = authRedirect(next ?? callbackUrl);
 
   const session = await auth();
   if (session?.user) redirect(target);
@@ -73,7 +74,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
 
         <p className="mt-6 text-center text-xs text-zinc-500">
           No account yet?{" "}
-          <Link className="text-zinc-300 hover:underline" href="/register">
+          <Link className="text-zinc-300 hover:underline" href={`/register?next=${encodeURIComponent(target)}`}>
             Create one
           </Link>
           .

@@ -59,7 +59,7 @@ export function LoginForm({ next }: { next: string }) {
 
       <p className="text-center text-sm text-zinc-400">
         No account?{" "}
-        <Link className="text-emerald-400 hover:underline" href="/register">
+        <Link className="text-emerald-400 hover:underline" href={`/register?next=${encodeURIComponent(next)}`}>
           Create one
         </Link>
       </p>
