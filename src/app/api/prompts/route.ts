@@ -3,14 +3,19 @@ import { NextResponse } from "next/server";
 import { failure, invalid, readJson } from "@/lib/api";
 import { requireCaller, requireCallerWorkspace, requireAuthorId } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
-import { createPromptSchema } from "@/lib/validations";
+import { createPromptSchema, promptListQuerySchema } from "@/lib/validations";
 
 // Prompts are workspace-scoped: you see the prompts in workspaces you belong
 // to, and nothing else.
 export async function GET(request: Request) {
   try {
     const caller = await requireCaller(request);
-    const workspaceId = new URL(request.url).searchParams.get("workspaceId");
+    const searchParams = new URL(request.url).searchParams;
+    const workspaceId = searchParams.get("workspaceId");
+    const parsed = promptListQuerySchema.safeParse({
+      offset: searchParams.get("offset") ?? undefined,
+    });
+    if (!parsed.success) return invalid(parsed.error);
 
     // Scoping to one workspace still goes through the caller check, so a
     // guessed id cannot be used to read someone else's prompts.
@@ -25,8 +30,10 @@ export async function GET(request: Request) {
 
     const prompts = await prisma.prompt.findMany({
       where: workspaceId ? { workspaceId } : scope,
-      orderBy: { updatedAt: "desc" },
+      // The id breaks timestamp ties so page boundaries do not drop prompts.
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
       take: 50,
+      skip: parsed.data.offset,
       include: {
         author: { select: { id: true, name: true, image: true } },
         workspace: { select: { id: true, name: true, slug: true } },

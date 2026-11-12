@@ -6,7 +6,7 @@ import { UNFILED } from "@/lib/agent-runs";
 import { variableNames } from "@/lib/prompts-core";
 
 import { CliError, createClient, type Client } from "./client";
-import { configPath, loadConfig, maskKey } from "./config";
+import { configPath, loadConfig, maskKey, type CliConfig } from "./config";
 import {
   box,
   changeCount,
@@ -19,6 +19,7 @@ import {
   when,
 } from "./format";
 import { matchPrompt } from "./resolve";
+import { fetchAllPrompts } from "./prompt-list";
 import { activeSnapshot, storedWorkspace, summariseSnapshots } from "./snapshot";
 import type {
   Commit,
@@ -76,8 +77,8 @@ export type ShellOptions = {
 type Shell = Omit<ShellOptions, "workspace"> & {
   client: Client;
   root: string;
-  /** The key the client was built with, watched so `auth login` takes effect. */
-  credential: string | undefined;
+  /** Connection settings watched so login, logout, and server changes take effect. */
+  connection: CliConfig;
   me: WhoAmI | null;
   workspaces: Workspace[];
   workspace: Workspace | null;
@@ -92,12 +93,12 @@ const TITLE = "Prompt OPS";
 
 // --- the loop ---------------------------------------------------------------
 
-export async function startShell(options: ShellOptions): Promise<number> {
-  const shell: Shell = {
+export function createShell(options: ShellOptions): Shell {
+  return {
     ...options,
     client: createClient(options.overrides),
     root: resolve(options.root ?? process.cwd()),
-    credential: loadConfig().key,
+    connection: loadConfig(),
     me: null,
     workspaces: [],
     workspace: null,
@@ -106,6 +107,10 @@ export async function startShell(options: ShellOptions): Promise<number> {
     expanded: false,
     timing: false,
   };
+}
+
+export async function startShell(options: ShellOptions): Promise<number> {
+  const shell = createShell(options);
 
   // Name the window, so a pane left open among six others says what it is.
   if (process.stdout.isTTY) process.stdout.write(`\u001b]0;${TITLE}\u0007`);
@@ -152,7 +157,7 @@ export async function startShell(options: ShellOptions): Promise<number> {
       const started = performance.now();
       let quit = false;
       try {
-        quit = await execute(shell, parsed.tokens);
+        quit = await executeShellCommand(shell, parsed.tokens);
       } catch (error) {
         report(error);
       }
@@ -259,7 +264,7 @@ function lineSource(reader: Interface): (prompt: string) => Promise<Input> {
 }
 
 /** True when the shell should stop. */
-async function execute(shell: Shell, tokens: string[]): Promise<boolean> {
+export async function executeShellCommand(shell: Shell, tokens: string[]): Promise<boolean> {
   if (tokens[0].startsWith("\\")) return meta(shell, tokens);
 
   // A shell inside the shell would nest two readlines on one stdin, and the
@@ -275,13 +280,21 @@ async function execute(shell: Shell, tokens: string[]): Promise<boolean> {
   // `auth login` and `keys create --save` rewrite the credential under us; a
   // client built before that would keep using the old one for the backslash
   // commands, which reads as the login not having worked.
-  const credential = loadConfig().key;
-  if (credential !== shell.credential) {
-    shell.credential = credential;
+  const connection = loadConfig();
+  if (
+    connection.key !== shell.connection.key ||
+    connection.session !== shell.connection.session ||
+    connection.url !== shell.connection.url
+  ) {
+    const workspace = shell.workspace?.slug;
+    shell.connection = connection;
     shell.client = createClient(shell.overrides);
     shell.me = null;
     shell.workspaces = [];
-    await connect(shell, shell.workspace?.slug);
+    shell.workspace = null;
+    shell.role = null;
+    shell.prompts = [];
+    await connect(shell, workspace);
   }
   return false;
 }
@@ -685,9 +698,7 @@ async function promptsIn(shell: Shell): Promise<PromptSummary[]> {
   const workspace = here(shell);
   // Always re-read: a `new` or an `edit` typed a moment ago should show up, and
   // the listing doubles as the completion cache.
-  shell.prompts = await shell.client.request<PromptSummary[]>(
-    `/api/prompts?workspaceId=${workspace.id}`,
-  );
+  shell.prompts = await fetchAllPrompts(shell.client, workspace.id);
   return shell.prompts;
 }
 

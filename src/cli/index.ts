@@ -27,6 +27,7 @@ import {
 } from "./config";
 import { changeCount, paint, paintChange, renderDiff, table, truncate, when } from "./format";
 import { matchKey, matchPrompt, parseRange, parseRef, parseVariables } from "./resolve";
+import { fetchAllPrompts } from "./prompt-list";
 import { askPassword, passwordSignIn } from "./session";
 import { startShell } from "./shell";
 import {
@@ -598,7 +599,7 @@ async function workspaces(client: Client, options: Options): Promise<number> {
 }
 
 async function fetchPrompts(client: Client, options: Options): Promise<PromptSummary[]> {
-  if (!options.workspace) return client.request<PromptSummary[]>("/api/prompts");
+  if (!options.workspace) return fetchAllPrompts(client);
 
   // A slug is what a person reads off the dashboard; the API scopes by id.
   const list = await client.request<Workspace[]>("/api/workspaces");
@@ -609,7 +610,7 @@ async function fetchPrompts(client: Client, options: Options): Promise<PromptSum
     const slugs = list.map((candidate) => candidate.slug).join(", ") || "none";
     throw new CliError(`No workspace "${options.workspace}". You can reach: ${slugs}.`);
   }
-  return client.request<PromptSummary[]>(`/api/prompts?workspaceId=${workspace.id}`);
+  return fetchAllPrompts(client, workspace.id);
 }
 
 async function prompts(client: Client, options: Options): Promise<number> {

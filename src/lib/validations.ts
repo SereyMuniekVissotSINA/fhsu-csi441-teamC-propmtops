@@ -50,6 +50,11 @@ export const createPromptSchema = promptSchema.extend({
   workspaceId: z.string().min(1, "Choose a workspace"),
 });
 
+export const promptListQuerySchema = z.object({
+  offset: z.string().regex(/^\d+$/).transform(Number)
+    .pipe(z.number().int().min(0).max(2_147_483_647)).default(0),
+});
+
 export const updatePromptSchema = promptSchema.extend({
   note: z.string().trim().max(240).default("Updated prompt"),
 });
